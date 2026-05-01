@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.cache/
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.playwright-browsers/
+frontend/test-results/
+
+# Local environment and logs
+.env
+*.local
+*.log
+output/
+
+# Editor and local agent state
+.vscode/
+.idea/
+.DS_Store
+.claude/
