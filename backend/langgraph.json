@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "travel": "./app/ai/graph_builder.py:travel"
+  },
+  "env": ".env"
+}

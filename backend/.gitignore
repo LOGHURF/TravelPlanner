@@ -1,0 +1,22 @@
+# Python cache/artifacts
+__pycache__/
+.cache/
+.pytest_cache/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Build/package artifacts
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+
+# Env files
+.env
+
+# IDE/tooling local dirs
+.claude/
