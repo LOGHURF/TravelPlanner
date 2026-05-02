@@ -11,6 +11,7 @@ from langchain_qwq import ChatQwen
 
 from app.config import get_logger, settings
 from app.ai.errors import LLMJsonError
+from app.ai.prompts import PromptId, render_prompt
 
 logger = get_logger("AIUtils")
 
@@ -94,6 +95,19 @@ async def invoke_llm_json_async(
         if isinstance(exc, LLMJsonError):
             raise
         raise LLMJsonError(f"LLM JSON call failed: {exc}") from exc
+
+
+async def invoke_prompt_json_async(
+    *,
+    prompt_id: PromptId,
+    variables: dict[str, Any],
+    temperature: float = 1.2,
+) -> dict[str, Any]:
+    """Render a managed prompt and invoke the JSON LLM gateway."""
+    return await invoke_llm_json_async(
+        prompt=render_prompt(prompt_id, variables),
+        temperature=temperature,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

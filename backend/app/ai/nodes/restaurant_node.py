@@ -18,13 +18,12 @@ from datetime import datetime
 from time import perf_counter
 from typing import Any, Dict, List
 
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_qwq import ChatQwen
 from pydantic import BaseModel, Field
 
-from app.config import get_logger, settings
+from app.config import get_logger
 from app.ai.models.graph_models import TripState
-from app.ai.utils import parse_float, parse_int, parse_location, build_food_keywords
+from app.ai.prompts import render_prompt
+from app.ai.utils import invoke_prompt_json_async, parse_float, parse_int, parse_location, build_food_keywords
 from app.services.amap import POI, POISearchResponse
 from app.ai.mcp.client import get_tool, invoke_tool_with_debug
 
@@ -245,37 +244,6 @@ class RestaurantSelectionOutput(BaseModel):
     selected_indexes: list[int] = Field(default_factory=list)
     is_sufficient: bool = False
     reason: str = ""
-
-
-PROMPT_FILTER = """从候选餐厅中选出适合当前行程的索引。
-
-最终推荐数：{final_needed}
-候选池目标数：{candidate_target}
-
-规则：
-1. 只返回索引，不要重写字段。
-2. 每天推荐约 2 家有特色的餐厅，优先保留本地特色、评分更高、图片更完整、介绍更清晰的候选。
-3. 尽量覆盖 lunch / dinner / snack 等不同场景，不要全部集中在同一类。
-4. 去掉明显重复或信息太弱的候选。
-5. 如果可用候选数不少于最终推荐数，你必须返回恰好 {final_needed} 个不重复索引。
-6. 如果可用候选数少于最终推荐数，你必须返回全部可用索引，并将 is_sufficient 设为 false。
-
-只返回 JSON：
-{{
-  "selected_indexes": [0, 3, 5],
-  "is_sufficient": true,
-  "reason": "一句话说明"
-}}
-"""
-
-_json_llm = ChatQwen(
-    model="qwen3.5-flash-2026-02-23",
-    api_key=settings.DASHSCOPE_API_KEY,
-    base_url=settings.DASHSCOPE_BASE_URL,
-    temperature=0.7,
-    extra_body={"enable_thinking": False},
-    model_kwargs={"response_format": {"type": "json_object"}},
-)
 
 
 def _trip_days(request: dict[str, Any]) -> int:
@@ -509,7 +477,6 @@ async def _select_restaurants_with_llm(*, request: dict[str, Any], candidates: l
     if not candidates:
         return [], "无候选餐厅"
 
-    prompt = PROMPT_FILTER.format(final_needed=final_needed, candidate_target=candidate_target)
     context = {
         "destination": request.get("destination", ""),
         "companions": request.get("companions", ""),
@@ -521,23 +488,32 @@ async def _select_restaurants_with_llm(*, request: dict[str, Any], candidates: l
     required = min(max(0, candidate_target), len(candidates))
 
     try:
-        feedback = ""
+        retry_instruction = ""
         last_reason = ""
         for _ in range(2):
-            messages = [
-                SystemMessage(content=prompt),
-                HumanMessage(content=json.dumps(context, ensure_ascii=False)),
-            ]
-            if feedback:
-                messages.append(HumanMessage(content=feedback))
-            response = await _json_llm.ainvoke(messages)
-            data = json.loads(response.content)
+            data = await invoke_prompt_json_async(
+                prompt_id="restaurant_filter",
+                variables={
+                    "final_needed": final_needed,
+                    "candidate_target": candidate_target,
+                    "context_json": json.dumps(context, ensure_ascii=False),
+                    "retry_instruction": retry_instruction,
+                },
+                temperature=0.7,
+            )
             parsed = RestaurantSelectionOutput.model_validate(data)
             selected = _pick_by_indexes(prepared_candidates, parsed.selected_indexes, limit=required)
             last_reason = parsed.reason
             if len(selected) == required:
                 return selected, parsed.reason
-            feedback = f"你上一次只返回了 {len(selected)} 个有效索引，但当前可用候选有 {len(prepared_candidates)} 个，目标数量是 {required}。请严格重新选择足够数量。"
+            retry_instruction = render_prompt(
+                "selection_retry",
+                {
+                    "selected_count": len(selected),
+                    "available_count": len(prepared_candidates),
+                    "required_count": required,
+                },
+            )
         return prepared_candidates[:required], last_reason or "模型未按数量要求返回足够索引"
     except Exception as exc:
         logger.warning("餐厅筛选失败: %s", exc)

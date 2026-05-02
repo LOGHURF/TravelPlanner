@@ -19,13 +19,12 @@ from math import ceil
 from time import perf_counter
 from typing import Any, Dict, List
 
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_qwq import ChatQwen
 from pydantic import BaseModel, Field
 
-from app.config import get_logger, settings
+from app.config import get_logger
 from app.ai.models.graph_models import TripState
-from app.ai.utils import parse_float, parse_location, build_hotel_keywords
+from app.ai.prompts import render_prompt
+from app.ai.utils import invoke_prompt_json_async, parse_float, parse_location, build_hotel_keywords
 from app.services.amap import POI, POISearchResponse
 from app.ai.mcp.client import get_tool, invoke_tool_with_debug
 
@@ -158,43 +157,6 @@ class HotelSelectionOutput(BaseModel):
     selected_indexes: list[int] = Field(default_factory=list)
     is_sufficient: bool = False
     reason: str = ""
-
-
-PROMPT_FILTER = """你是酒店筛选与住宿档次校验助手。请严格按用户的住宿档次要求筛选。
-
-最终入住酒店数：{final_needed}
-候选池目标数：{candidate_target}
-用户要求档次：{hotel_level}
-价格区间参考：{price_range}
-
-规则：
-1. 只返回索引，不要重写字段。
-2. 酒店按约每 2 天 1 家来规划，优先保留位置互补、评分更高、图片更完整的候选。
-3. 去掉明显重复的酒店。
-4. 必须严格匹配住宿档次：
-   - 如果用户要"高档型"或"豪华型"，不要选择旅馆、客栈、招待所、青年旅舍、民宿这类低档住宿。
-   - 如果名称、类型、描述明显和用户档次冲突，直接排除。
-5. 优先保留符合住宿档次、价格区间、交通便利性和用户偏好的候选。
-6. 对于高档型/豪华型，优先星级酒店、品牌酒店、度假酒店、高端酒店；低档住宿即便评分高也不要保留。
-7. 如果可用候选数不少于目标数量，你必须返回恰好 {candidate_target} 个不重复索引。
-8. 如果可用候选数少于目标数量，你必须返回全部可用索引，并将 is_sufficient 设为 false。
-
-只返回 JSON：
-{{
-  "selected_indexes": [0, 2, 5],
-  "is_sufficient": true,
-  "reason": "一句话说明"
-}}
-"""
-
-_json_llm = ChatQwen(
-    model="qwen3.5-flash-2026-02-23",
-    api_key=settings.DASHSCOPE_API_KEY,
-    base_url=settings.DASHSCOPE_BASE_URL,
-    temperature=0.7,
-    extra_body={"enable_thinking": False},
-    model_kwargs={"response_format": {"type": "json_object"}},
-)
 
 
 def _trip_days(request: dict[str, Any]) -> int:
@@ -444,12 +406,6 @@ async def _select_hotel_candidates_with_llm(
     if not candidates:
         return [], "无候选酒店"
 
-    prompt = PROMPT_FILTER.format(
-        final_needed=final_needed,
-        candidate_target=candidate_target,
-        hotel_level=request.get("hotel_level", "舒适型"),
-        price_range=price_range,
-    )
     context = {
         "destination": request.get("destination", ""),
         "companions": request.get("companions", ""),
@@ -462,25 +418,33 @@ async def _select_hotel_candidates_with_llm(
     required = min(max(0, candidate_target), len(candidates))
 
     try:
-        feedback = ""
+        retry_instruction = ""
         last_reason = ""
         for _ in range(2):
-            messages = [
-                SystemMessage(content=prompt),
-                HumanMessage(content=json.dumps(context, ensure_ascii=False)),
-            ]
-            if feedback:
-                messages.append(HumanMessage(content=feedback))
-            response = await _json_llm.ainvoke(messages)
-            data = json.loads(response.content)
+            data = await invoke_prompt_json_async(
+                prompt_id="hotel_filter",
+                variables={
+                    "final_needed": final_needed,
+                    "candidate_target": candidate_target,
+                    "hotel_level": request.get("hotel_level", "舒适型"),
+                    "price_range": price_range,
+                    "context_json": json.dumps(context, ensure_ascii=False),
+                    "retry_instruction": retry_instruction,
+                },
+                temperature=0.7,
+            )
             parsed = HotelSelectionOutput.model_validate(data)
             selected = _pick_hotels_by_indexes(prepared_candidates, parsed.selected_indexes, limit=required)
             last_reason = parsed.reason
             if len(selected) == required:
                 return selected, parsed.reason
-            feedback = (
-                f"你上一次只返回了 {len(selected)} 个有效索引，但当前可用候选有 {len(prepared_candidates)} 个，"
-                f"目标数量是 {required}。请严格重新选择足够数量。"
+            retry_instruction = render_prompt(
+                "selection_retry",
+                {
+                    "selected_count": len(selected),
+                    "available_count": len(prepared_candidates),
+                    "required_count": required,
+                },
             )
         return prepared_candidates[:required], last_reason or "模型未按数量要求返回足够索引"
     except Exception as exc:

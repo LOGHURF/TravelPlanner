@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from itertools import combinations
 from math import asin, ceil, comb, cos, radians, sin, sqrt
@@ -21,10 +22,11 @@ from typing import Any
 from app.config import get_logger
 from app.ai.errors import LLMJsonError
 from app.ai.models.graph_models import TripState
+from app.ai.prompts import render_prompt
 from app.ai.utils import (
     distribute_attractions,
     distribute_hotels,
-    invoke_llm_json_async,
+    invoke_prompt_json_async,
     parse_location,
 )
 
@@ -382,8 +384,17 @@ def _optimize_hotel_selection(candidates: list[dict[str, Any]], attractions: lis
     )[:limit]
 
 
-def _build_prompt(*, request: dict[str, Any], needed_attractions: int, needed_hotels: int, retained_hotels: int, attraction_brief: list[dict[str, Any]], hotel_brief: list[dict[str, Any]]) -> str:
-    """构造评审提示词"""
+def _build_prompt_variables(
+    *,
+    request: dict[str, Any],
+    needed_attractions: int,
+    needed_hotels: int,
+    retained_hotels: int,
+    attraction_brief: list[dict[str, Any]],
+    hotel_brief: list[dict[str, Any]],
+    retry_instruction: str = "",
+) -> dict[str, Any]:
+    """构造评审提示词变量"""
     context = {
         "destination": request.get("destination", ""),
         "days": request.get("days", request.get("duration", 1)),
@@ -395,23 +406,25 @@ def _build_prompt(*, request: dict[str, Any], needed_attractions: int, needed_ho
         "needed_hotels": needed_hotels,
         "retained_hotels": retained_hotels,
     }
-    return (
-        "你是旅行评审智能体。请基于用户偏好和候选数据做综合评审，优先考虑匹配度与体验质量。"
-        "不要套模板，按当前用户真实需求权衡。\n"
-        "只返回JSON对象，不要输出额外说明。字段必须包含：\n"
-        "1) selected_attraction_indexes: int[]\n"
-        "2) selected_hotel_indexes: int[]\n"
-        "3) reviewer_notes: string[]\n\n"
-        f"景点规则：如果某个景点和其他景点明显过远、很难并入主路线，优先不选；除非它非常符合用户偏好且值得单独安排。\n"
-        "景点去重规则：同一景区的重复条目、别名条目、相同景点的不同写法，不要重复选择。\n"
-        "景点多样性规则：如果候选足够，尽量不要全选同一类型景点，优先组合不同体验的景点。\n"
-        f"酒店选择规则：入住酒店按约每2天1家规划，但为了后续按区域分配，需要保留 {retained_hotels} 家位置互补的备选酒店。\n\n"
-        "酒店档次规则：如果用户选择高档型或豪华型，不要选择旅馆、客栈、招待所、青年旅舍，民宿等低档住宿。\n\n"
-        f"数量规则：如果候选数量足够，景点必须选满 {needed_attractions} 个，酒店必须选满 {retained_hotels} 个；"
-        f"如果酒店候选不足，也要尽量保留能支撑 {needed_hotels} 家入住的区域覆盖，并明确说明不足原因。\n\n"
-        f"用户上下文:\n{context}\n\n"
-        f"景点候选:\n{attraction_brief}\n\n"
-        f"酒店候选:\n{hotel_brief}"
+    return {
+        "needed_attractions": needed_attractions,
+        "needed_hotels": needed_hotels,
+        "retained_hotels": retained_hotels,
+        "retry_instruction": retry_instruction,
+        "context_json": json.dumps(context, ensure_ascii=False),
+        "attraction_brief_json": json.dumps(attraction_brief, ensure_ascii=False),
+        "hotel_brief_json": json.dumps(hotel_brief, ensure_ascii=False),
+    }
+
+
+def _selection_retry_instruction(*, selected_count: int, available_count: int, required_count: int) -> str:
+    return render_prompt(
+        "selection_retry",
+        {
+            "selected_count": selected_count,
+            "available_count": available_count,
+            "required_count": required_count,
+        },
     )
 
 
@@ -431,21 +444,36 @@ async def reviewer_node(state: TripState) -> dict[str, Any]:
     required_attractions = _required_count(attraction_ranked, needed)
     required_hotels = _required_count(hotel_ranked, retained_hotels)
 
-    prompt = _build_prompt(
+    prompt_variables = _build_prompt_variables(
         request=request,
         needed_attractions=needed,
         needed_hotels=needed_hotels,
         retained_hotels=retained_hotels,
-        attraction_brief=_build_candidate_brief(attraction_candidates, with_price=False),
-        hotel_brief=_build_candidate_brief(hotel_candidates, with_price=True),
+        attraction_brief=_build_candidate_brief(attraction_ranked, with_price=False),
+        hotel_brief=_build_candidate_brief(hotel_ranked, with_price=True),
     )
-    llm_data = await invoke_llm_json_async(prompt=prompt, temperature=1.2)
+    llm_data = await invoke_prompt_json_async(
+        prompt_id="reviewer_selection",
+        variables=prompt_variables,
+        temperature=1.2,
+    )
 
     # 处理景点选择
     selected_attractions = _pick_by_indexes(attraction_ranked, llm_data.get("selected_attraction_indexes"), limit=required_attractions)
     if len(selected_attractions) != required_attractions:
-        retry_prompt = f"{prompt}\n\n你上一次返回的景点数量不足。当前可用景点候选为 {len(attraction_ranked)} 个，目标是 {required_attractions} 个，请严格重新返回足够数量的有效索引。"
-        llm_data_retry = await invoke_llm_json_async(prompt=retry_prompt, temperature=0.6)
+        retry_variables = {
+            **prompt_variables,
+            "retry_instruction": _selection_retry_instruction(
+                selected_count=len(selected_attractions),
+                available_count=len(attraction_ranked),
+                required_count=required_attractions,
+            ),
+        }
+        llm_data_retry = await invoke_prompt_json_async(
+            prompt_id="reviewer_selection",
+            variables=retry_variables,
+            temperature=0.6,
+        )
         selected_attractions = _pick_by_indexes(attraction_ranked, llm_data_retry.get("selected_attraction_indexes"), limit=required_attractions)
         if llm_data_retry.get("reviewer_notes"):
             llm_data["reviewer_notes"] = llm_data_retry.get("reviewer_notes")
@@ -454,15 +482,25 @@ async def reviewer_node(state: TripState) -> dict[str, Any]:
             f"reviewer returned insufficient attraction indexes: got={len(selected_attractions)} required={required_attractions}"
         )
 
-    selected_attractions = _optimize_attraction_selection(attraction_ranked, hotel_ranked, days=days, limit=required_attractions)
     selected_attractions = _drop_far_outlier_attractions(selected_attractions, attraction_ranked, limit=required_attractions)[:required_attractions]
     selected_attractions = _diversify_attractions(selected_attractions, attraction_ranked, limit=required_attractions)
 
     # 处理酒店选择
     selected_hotels = _pick_by_indexes(hotel_ranked, llm_data.get("selected_hotel_indexes"), limit=required_hotels)
     if len(selected_hotels) != required_hotels:
-        retry_prompt = f"{prompt}\n\n你上一次返回的酒店数量不足。当前可用酒店候选为 {len(hotel_ranked)} 个，目标是 {required_hotels} 个，请严格重新返回足够数量的有效索引。"
-        llm_data_retry = await invoke_llm_json_async(prompt=retry_prompt, temperature=0.6)
+        retry_variables = {
+            **prompt_variables,
+            "retry_instruction": _selection_retry_instruction(
+                selected_count=len(selected_hotels),
+                available_count=len(hotel_ranked),
+                required_count=required_hotels,
+            ),
+        }
+        llm_data_retry = await invoke_prompt_json_async(
+            prompt_id="reviewer_selection",
+            variables=retry_variables,
+            temperature=0.6,
+        )
         selected_hotels = _pick_by_indexes(hotel_ranked, llm_data_retry.get("selected_hotel_indexes"), limit=required_hotels)
         if llm_data_retry.get("reviewer_notes"):
             llm_data["reviewer_notes"] = llm_data_retry.get("reviewer_notes")
@@ -471,7 +509,11 @@ async def reviewer_node(state: TripState) -> dict[str, Any]:
             f"reviewer returned insufficient hotel indexes: got={len(selected_hotels)} required={required_hotels}"
         )
 
-    selected_hotels = _optimize_hotel_selection(hotel_ranked, selected_attractions, days=days, limit=required_hotels)
+    selected_hotels = _top_up_selection(
+        selected_hotels,
+        _optimize_hotel_selection(hotel_ranked, selected_attractions, days=days, limit=required_hotels),
+        limit=required_hotels,
+    )
 
     # 处理评审说明
     notes_raw = llm_data.get("reviewer_notes")

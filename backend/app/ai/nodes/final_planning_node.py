@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -23,7 +24,7 @@ from app.ai.utils import (
     distribute_attractions,
     distribute_hotels,
     distribute_restaurants,
-    invoke_llm_json_async,
+    invoke_prompt_json_async,
     sum_route_segment_cost,
 )
 
@@ -189,7 +190,7 @@ def create_daily_plan(
     }
 
 
-def _build_summary_prompt(
+def _build_summary_prompt_variables(
     *,
     request: dict[str, Any],
     attractions: list[dict[str, Any]],
@@ -197,8 +198,8 @@ def _build_summary_prompt(
     restaurants: list[dict[str, Any]],
     weather: list[dict[str, Any]],
     days: int,
-) -> str:
-    """构造行程总结提示词"""
+) -> dict[str, Any]:
+    """构造行程总结提示词变量"""
     context = {
         "destination": request.get("destination", ""),
         "days": days,
@@ -210,16 +211,9 @@ def _build_summary_prompt(
         "restaurant_recommendations": [r.get("name", "") for r in restaurants[: min(days * 2, len(restaurants))]],
         "weather_brief": weather[: min(3, len(weather))],
     }
-    return (
-        "你是旅行行程总结智能体。请给出简洁、可执行、不过度铺陈的结果。"
-        "只返回JSON对象，字段：\n"
-        "1) overall_suggestions: string\n"
-        "2) important_notes: string[]\n"
-        "3) packing_tips: string[]\n"
-        "4) narrative_plan: string\n"
-        "   用2到4个自然段写简洁说明，不要写成长篇攻略。\n\n"
-        f"上下文:\n{context}"
-    )
+    return {
+        "context_json": json.dumps(context, ensure_ascii=False),
+    }
 
 
 def _build_fallback_narrative(*, destination: str, daily_plans: list[dict[str, Any]]) -> str:
@@ -380,7 +374,7 @@ async def final_planning_node(state: TripState) -> TripState:
         "packing_tips": ["身份证", "充电器", "舒适鞋子"],
         "narrative_plan": "",
     }
-    summary_prompt = _build_summary_prompt(
+    summary_variables = _build_summary_prompt_variables(
         request=request,
         attractions=attractions,
         hotels=used_hotels,
@@ -388,8 +382,9 @@ async def final_planning_node(state: TripState) -> TripState:
         weather=weather_list,
         days=days,
     )
-    llm_data = await invoke_llm_json_async(
-        prompt=summary_prompt,
+    llm_data = await invoke_prompt_json_async(
+        prompt_id="final_summary",
+        variables=summary_variables,
         temperature=0.35,
     )
 

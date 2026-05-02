@@ -48,3 +48,30 @@ def test_invoke_llm_json_async_requests_json_object_response(monkeypatch) -> Non
     assert _FakeJsonChatQwen.last_kwargs["model_kwargs"] == {
         "response_format": {"type": "json_object"}
     }
+
+
+def test_invoke_prompt_json_async_renders_managed_template(monkeypatch) -> None:
+    seen_prompt = ""
+
+    class FakePromptChatQwen(_FakeJsonChatQwen):
+        async def ainvoke(self, prompt):
+            nonlocal seen_prompt
+            seen_prompt = prompt
+            return _FakeJsonResponse()
+
+    monkeypatch.setattr(utils, "ChatQwen", FakePromptChatQwen)
+
+    data = asyncio.run(
+        utils.invoke_prompt_json_async(
+            prompt_id="selection_retry",
+            variables={
+                "selected_count": 1,
+                "available_count": 5,
+                "required_count": 3,
+            },
+            temperature=0.2,
+        )
+    )
+
+    assert data == {"ok": True}
+    assert "目标数量是 3" in seen_prompt

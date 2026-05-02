@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from itertools import combinations
 from math import asin, cos, radians, sin, sqrt
@@ -24,7 +25,7 @@ from app.ai.utils import (
     distribute_attractions,
     distribute_hotels,
     distribute_restaurants,
-    invoke_llm_json_async,
+    invoke_prompt_json_async,
     parse_float,
     parse_int,
     parse_location,
@@ -702,19 +703,18 @@ async def _plan_trip_with_llm(
         hotels=hotels,
         default_plan=default_plan,
     )
-    prompt = (
-        "你是多日旅行排期助手。请先从整个行程的顺路性出发，整体考虑这几天的游玩顺序，再拆解成每天分别去哪些景点和搭配哪些餐厅。"
-        "请根据酒店位置、景点距离、餐厅搭配、游玩便利性做全局规划后，再输出每日分配。"
-        "酒店已经按约两天一换固定，不要改酒店，只需要分配每天的景点和餐厅。"
-        "不要发明新地点，不要重复使用同一景点或餐厅。"
-        "景点顺序就是当天游玩的先后顺序。"
-        f"如果景点总数足够支撑每天 {target_per_day} 个景点，那么每天都必须安排 {target_per_day} 个景点，最后一天也一样，不能减少。"
-        "只返回 JSON 对象，字段：days: [{day_index, attraction_indexes, meal_indexes, reason}], overall_reason: string。\n\n"
-        f"用户上下文: destination={request.get('destination', '')}, companions={request.get('companions', '')}, style_preferences={request.get('style_preferences', [])}\n"
-        f"候选上下文: {context}"
-    )
-    llm_data = await invoke_llm_json_async(
-        prompt=prompt,
+    request_context = {
+        "destination": request.get("destination", ""),
+        "companions": request.get("companions", ""),
+        "style_preferences": request.get("style_preferences", []),
+    }
+    llm_data = await invoke_prompt_json_async(
+        prompt_id="transport_plan",
+        variables={
+            "target_per_day": target_per_day,
+            "request_context_json": json.dumps(request_context, ensure_ascii=False),
+            "candidate_context_json": json.dumps(context, ensure_ascii=False),
+        },
         temperature=0.2,
     )
     normalized = _normalize_trip_plan(

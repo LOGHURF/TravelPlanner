@@ -44,54 +44,6 @@ def _trip_days(request: dict[str, Any]) -> int:
         return 1
 
 
-def _structured_output_prompt(
-    *,
-    request: dict[str, Any],
-    weather: WeatherResponse,
-    limit: int,
-) -> str:
-    """构建 LLM 提示词，将 WeatherResponse 转为文本描述."""
-    # 直接从结构化响应提取关键信息
-    forecasts_text = ""
-    if weather.forecasts:
-        forecasts_lines = []
-        for fc in weather.forecasts[:limit]:
-            forecasts_lines.append(
-                f"- 日期: {fc.date}, 白天: {fc.day_weather}, 夜间: {fc.night_weather}, "
-                f"白天温度: {fc.day_temp}°C, 夜间温度: {fc.night_temp}°C, "
-                f"风向: {fc.wind_direction}, 风力: {fc.wind_power}"
-            )
-        forecasts_text = "\n".join(forecasts_lines)
-
-    current_weather = (
-        f"当前天气: {weather.weather}, 温度: {weather.temperature}°C, "
-        f"风向: {weather.winddirection}, 风力: {weather.windpower}, "
-        f"湿度: {weather.humidity}%"
-    )
-
-    return f"""
-你是一个天气信息整理助手，请把天气工具返回结果整理为 WeatherBatchOutput。
-
-用户请求：
-- destination: {request.get("destination", "")}
-- start_date: {request.get("start_date", "")}
-- end_date: {request.get("end_date", "")}
-- days: {request.get("days", "")}
-
-当前天气（实时）:
-{current_weather}
-
-预报天气:
-{forecasts_text or '无预报数据'}
-
-输出要求：
-1) 只输出 WeatherBatchOutput 结构。
-2) 最多输出 {limit} 天天气。
-3) 优先使用预报数据，如果没有预报则使用当前天气信息。
-4) 不要编造明显不可信的信息。
-""".strip()
-
-
 async def _collect_mcp_result(
     *,
     tool_name: str,

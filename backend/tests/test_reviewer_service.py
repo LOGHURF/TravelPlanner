@@ -1,3 +1,5 @@
+import asyncio
+
 from app.ai.nodes.reviewer_node import (
     _dedupe_attractions,
     _diversify_attractions,
@@ -7,6 +9,7 @@ from app.ai.nodes.reviewer_node import (
     _optimize_hotel_selection,
     _retained_hotel_count,
     _top_up_selection,
+    reviewer_node,
 )
 
 
@@ -122,3 +125,51 @@ def test_optimize_hotel_selection_prefers_hotels_close_to_selected_attractions()
     result = _optimize_hotel_selection(hotels, attractions, days=2, limit=2)
 
     assert [item["name"] for item in result] == ["湘湖酒店", "西湖酒店"]
+
+
+def test_reviewer_node_preserves_llm_selected_indexes(monkeypatch) -> None:
+    attractions = [
+        {"name": "A", "address": "a", "location": {"lat": 30.10, "lng": 120.10}, "rating": 5.0, "type": "湖景"},
+        {"name": "B", "address": "b", "location": {"lat": 30.11, "lng": 120.11}, "rating": 4.9, "type": "古镇"},
+        {"name": "C", "address": "c", "location": {"lat": 30.12, "lng": 120.12}, "rating": 4.8, "type": "博物馆"},
+        {"name": "D", "address": "d", "location": {"lat": 30.13, "lng": 120.13}, "rating": 4.7, "type": "公园"},
+    ]
+    hotels = [
+        {"name": "H1", "address": "h1", "location": {"lat": 30.10, "lng": 120.10}, "rating": 5.0},
+        {"name": "H2", "address": "h2", "location": {"lat": 30.12, "lng": 120.12}, "rating": 4.9},
+        {"name": "H3", "address": "h3", "location": {"lat": 30.13, "lng": 120.13}, "rating": 4.8},
+    ]
+    captured_variables = {}
+
+    async def fake_invoke_prompt_json_async(*, prompt_id, variables, temperature):
+        captured_variables.update(variables)
+        return {
+            "selected_attraction_indexes": [2, 3],
+            "selected_hotel_indexes": [2, 1, 0],
+            "reviewer_notes": ["按用户偏好选择"],
+        }
+
+    monkeypatch.setattr(
+        "app.ai.nodes.reviewer_node.invoke_prompt_json_async",
+        fake_invoke_prompt_json_async,
+    )
+
+    result = asyncio.run(
+        reviewer_node(
+            {
+                "request": {
+                    "destination": "杭州",
+                    "days": 1,
+                    "style_preferences": ["文化体验"],
+                    "hotel_level": "舒适型",
+                },
+                "needed_attractions": 2,
+                "attraction_candidates": attractions,
+                "hotel_candidates": hotels,
+            }
+        )
+    )
+
+    assert [item["name"] for item in result["attractions"]] == ["C", "D"]
+    assert [item["name"] for item in result["hotels"]] == ["H3", "H2", "H1"]
+    assert '"name": "C"' in captured_variables["attraction_brief_json"]
