@@ -26,6 +26,15 @@ frontend/test-results/
 *.log
 output/
 
+# Local planning and agent notes
+findings.md
+progress.md
+task_plan.md
+start-dev.ps1
+TravelPlanner_MultiAgent_方案.md
+frontend/VUE3_REFACTOR_PLAN.md
+frontend/.impeccable.md
+
 # Editor and local agent state
 .vscode/
 .idea/
