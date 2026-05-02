@@ -84,11 +84,18 @@ def _build_agent_payload(
     return payload
 
 
-def _iter_new_update_lines(previous_updates: str, current_updates: str) -> list[str]:
-    if not current_updates or current_updates == previous_updates:
+def _iter_new_update_lines(emitted_lines: set[str], current_updates: str) -> list[str]:
+    if not current_updates:
         return []
-    new_lines = current_updates[len(previous_updates):].strip()
-    return [line.strip() for line in new_lines.split("\n") if line.strip()]
+
+    new_lines: list[str] = []
+    for line in current_updates.splitlines():
+        text = line.strip()
+        if not text or text in emitted_lines:
+            continue
+        emitted_lines.add(text)
+        new_lines.append(text)
+    return new_lines
 
 
 def _extract_counts(node_name: str, node_state: TripState) -> dict[str, int]:
@@ -296,7 +303,7 @@ async def plan_travel(request: TripRequest, graph=Depends(get_graph)):
         config = {"configurable": {"thread_id": str(uuid.uuid4())}}
         
         # 跟踪进度
-        previous_updates = ""
+        emitted_update_lines: set[str] = set()
         started_agents = {"orchestrator"}
 
         yield _sse_event(
@@ -319,7 +326,7 @@ async def plan_travel(request: TripRequest, graph=Depends(get_graph)):
                     
                     # 获取进度更新
                     current_updates = node_state.get("streaming_updates", "")
-                    new_lines = _iter_new_update_lines(previous_updates, current_updates)
+                    new_lines = _iter_new_update_lines(emitted_update_lines, current_updates)
                     if new_lines:
                         for line in new_lines:
                             yield _sse_event({"type": "progress", "message": line})
@@ -333,7 +340,6 @@ async def plan_travel(request: TripRequest, graph=Depends(get_graph)):
                                         progress=72,
                                     )
                                 )
-                        previous_updates = current_updates
 
                     for payload in _build_node_completion_payloads(node_name, node_state):
                         yield _sse_event(payload)

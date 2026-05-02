@@ -163,29 +163,20 @@ def _contains_any(text: str, words: list[str]) -> bool:
 
 
 ATTRACTION_STYLE_MAP: dict[str, list[str]] = {
-    "自然风光": ["山景", "湖景", "湿地", "森林步道", "花海", "景区"],
-    "历史古迹": ["古迹", "古镇", "纪念馆", "名人故居", "历史街区", "城墙"],
-    "文化体验": ["博物馆", "艺术馆", "展览馆", "文化馆", "非遗馆", "创意园"],
-    "美食": ["历史街区", "夜景", "湖滨步道", "城市地标"],
-    "购物": ["商圈", "步行街", "商业街", "文创街区"],
-}
-
-ATTRACTION_COMPANION_MAP: dict[str, list[str]] = {
-    "情侣": ["夜景", "江景", "游船", "摩天轮", "观景台"],
-    "家庭": ["动物园", "海洋馆", "植物园", "游乐园", "博物馆"],
-    "朋友": ["夜景", "创意园", "步行街", "主题乐园", "地标"],
-    "老人": ["古镇", "纪念馆", "博物馆", "湖景", "历史街区"],
-    "独自": ["博物馆", "展览馆", "历史街区", "美术馆", "地标"],
+    "自然风光": ["湿地公园"],
+    "历史古迹": ["历史古迹"],
+    "文化体验": ["博物馆"],
+    "购物": ["步行街"],
 }
 
 CITY_ATTRACTION_MAP: dict[str, list[str]] = {
-    "杭州": ["西湖景区", "历史街区", "湿地公园", "博物馆", "古刹"],
-    "北京": ["皇家古迹", "历史街区", "博物馆", "园林", "古建筑"],
-    "上海": ["外滩", "历史街区", "博物馆", "创意园", "地标"],
-    "成都": ["历史街区", "博物馆", "熊猫基地", "古镇", "创意园"],
-    "西安": ["古城墙", "博物馆", "历史街区", "古迹", "大雁塔"],
-    "广州": ["历史街区", "博物馆", "广州塔", "沙面", "公园"],
-    "苏州": ["园林", "历史街区", "博物馆", "金鸡湖", "古镇"],
+    "杭州": ["湖景", "历史街区"],
+    "北京": ["皇家古迹", "历史街区"],
+    "上海": ["滨江地标", "历史街区"],
+    "成都": ["历史街区", "博物馆"],
+    "西安": ["古城墙", "博物馆"],
+    "广州": ["历史街区", "博物馆"],
+    "苏州": ["园林", "历史街区"],
 }
 
 FOOD_STYLE_MAP: dict[str, list[str]] = {
@@ -269,9 +260,7 @@ def _special_requirement_keywords(text: str, category: str) -> list[str]:
 
 def build_attraction_keywords(request: dict[str, Any], *, seed_keywords: list[str] | None = None, limit: int = 8) -> list[str]:
     destination = str(request.get("destination", "")).strip()
-    companions = str(request.get("companions", "独自")).strip() or "独自"
     styles = [str(item).strip() for item in (request.get("style_preferences") or []) if str(item).strip()]
-    pace = str(request.get("pace", "适中")).strip()
     special = str(request.get("special_requirements", "") or "").strip()
 
     values: list[str] = []
@@ -279,21 +268,9 @@ def build_attraction_keywords(request: dict[str, Any], *, seed_keywords: list[st
     values.extend(CITY_ATTRACTION_MAP.get(destination, []))
     for style in styles:
         values.extend(ATTRACTION_STYLE_MAP.get(style, []))
-    values.extend(ATTRACTION_COMPANION_MAP.get(companions, []))
     values.extend(_special_requirement_keywords(special, "attraction"))
 
-    if pace == "宽松":
-        values.extend(["湖景", "古镇", "历史街区"])
-    elif pace == "紧凑":
-        values.extend(["地标", "博物馆", "历史街区"])
-
-    values.extend(["地标", "博物馆", "历史街区", "夜景", "景区"])
-    if not styles:
-        values.extend(["博物馆", "历史街区", "地标"])
-
-    ordered = _uniq(values, limit * 2)
-    # 不再自动添加目的地前缀，使用纯类型关键词搜索
-    return _uniq(ordered, limit)
+    return _uniq(values, limit)
 
 
 def build_food_keywords(request: dict[str, Any], *, seed_keywords: list[str] | None = None, limit: int = 8) -> list[str]:

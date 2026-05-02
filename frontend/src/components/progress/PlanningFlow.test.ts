@@ -46,6 +46,44 @@ describe('PlanningFlow', () => {
     expect(wrapper.text()).toMatch(/天气召回\s*等待中/)
   })
 
+  it('does not infer reviewer completion from upstream attraction or hotel data', () => {
+    const state = createBaseState()
+    state.attractions = [
+      {
+        name: '西湖',
+        address: '杭州',
+        category: '风景名胜',
+      },
+    ]
+    state.hotels = [
+      {
+        name: '杭州酒店',
+        address: '杭州',
+        hotel_level: '舒适型',
+      },
+    ]
+    state.agents.attraction_agent = {
+      ...state.agents.attraction_agent,
+      status: 'running',
+      progress: 45,
+    }
+    state.agents.hotel_agent = {
+      ...state.agents.hotel_agent,
+      status: 'completed',
+      progress: 100,
+    }
+
+    const wrapper = mount(PlanningFlow, {
+      props: {
+        state,
+        currentStageLabel: '并行召回景点、酒店与天气',
+        activeAgentId: 'attraction_agent',
+      },
+    })
+
+    expect(wrapper.text()).toMatch(/评审压缩\s*等待中/)
+  })
+
   it('renders a directional workflow graph with visible branch edges', () => {
     const state = createBaseState()
     state.agents.orchestrator = {

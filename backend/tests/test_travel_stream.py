@@ -8,10 +8,21 @@ import pytest
 
 
 def test_iter_new_update_lines_extracts_incremental_lines():
-    previous = "开始规划\n景点完成: 4个"
+    emitted = {"开始规划", "景点完成: 4个"}
     current = "开始规划\n景点完成: 4个\n酒店完成: 2个\n天气完成: 3天"
 
-    assert _iter_new_update_lines(previous, current) == ["酒店完成: 2个", "天气完成: 3天"]
+    assert _iter_new_update_lines(emitted, current) == ["酒店完成: 2个", "天气完成: 3天"]
+    assert emitted == {"开始规划", "景点完成: 4个", "酒店完成: 2个", "天气完成: 3天"}
+
+
+def test_iter_new_update_lines_does_not_slice_parallel_branch_fragments():
+    emitted = {"已接收需求: 杭州, 1天, 1人", "天气完成: 1天"}
+    current = "已接收需求: 杭州, 1天, 1人\n酒店关键词: 舒适型酒店\n酒店候选完成: 5家(目标5)"
+
+    assert _iter_new_update_lines(emitted, current) == [
+        "酒店关键词: 舒适型酒店",
+        "酒店候选完成: 5家(目标5)",
+    ]
 
 
 def test_resolve_next_agent_starts_for_parallel_and_serial_nodes():

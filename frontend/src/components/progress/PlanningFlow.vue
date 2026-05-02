@@ -244,7 +244,7 @@ function hasStructuredResult(agentId: PlanningAgentId) {
     case 'hotel_agent':
       return props.state.hotels.length > 0
     case 'reviewer_agent':
-      return props.state.attractions.length > 0 || props.state.hotels.length > 0
+      return false
     case 'restaurant_agent':
       return props.state.restaurants.length > 0
     case 'transport_agent':
