@@ -18,7 +18,7 @@ import TimelineItem from '@/components/result/TimelineItem.vue'
 import { Button, Toast } from '@/components/ui'
 import { downloadPlanAsHtml } from '@/services/storage/planStorage'
 import { usePlanResultStore } from '@/stores/planResult'
-import type { TimelineItem as DayTimelineItem, Attraction } from '@/types/travel'
+import type { TimelineItem as DayTimelineItem, Attraction, Restaurant } from '@/types/travel'
 import type { DayMapStop } from '@/composables/useAmapRoute'
 import { formatShortDate } from '@/utils/date'
 import { getHotelImage } from '@/utils/media'
@@ -59,6 +59,14 @@ function createFallbackImage(title: string, accent: string) {
     </svg>
   `
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`
+}
+
+function formatMealAnchor(meal: Restaurant) {
+  const distance = Number(meal.distance_to_anchor_km || 0)
+  if (!meal.meal_anchor_name || distance <= 0) {
+    return ''
+  }
+  return `距 ${meal.meal_anchor_name} ${distance.toFixed(1)} km`
 }
 
 const destinationColor = computed(() =>
@@ -483,6 +491,12 @@ function reviewPlanning() {
                   </div>
                   <p class="mt-1 text-xs leading-relaxed text-slate-600">
                     {{ meal.cuisine_type || meal.meal_type || meal.type }}
+                  </p>
+                  <p
+                    v-if="formatMealAnchor(meal)"
+                    class="mt-1 text-xs leading-relaxed text-slate-500"
+                  >
+                    {{ formatMealAnchor(meal) }}
                   </p>
                 </div>
                 <span class="rounded-lg bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">

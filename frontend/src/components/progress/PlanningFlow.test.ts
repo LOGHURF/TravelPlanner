@@ -18,17 +18,8 @@ function createBaseState(): PlanningState {
   }
 }
 
-function horizontalSpread(path?: string) {
-  const numbers = path?.match(/-?\d+(?:\.\d+)?/g)?.map(Number) || []
-  const xValues = numbers.filter((_, index) => index % 2 === 0)
-  if (!xValues.length) {
-    return Number.POSITIVE_INFINITY
-  }
-  return Math.max(...xValues) - Math.min(...xValues)
-}
-
 describe('PlanningFlow', () => {
-  it('does not infer a parallel weather node as completed from later chain progress', () => {
+  it('does not infer a parallel weather node as completed from later progress', () => {
     const state = createBaseState()
     state.agents.final_planning = {
       ...state.agents.final_planning,
@@ -43,32 +34,20 @@ describe('PlanningFlow', () => {
       },
     })
 
-    expect(wrapper.text()).toMatch(/天气召回\s*等待中/)
+    expect(wrapper.text()).toMatch(/天气检查\s*等待中/)
   })
 
-  it('does not infer reviewer completion from upstream attraction or hotel data', () => {
+  it('does not infer anchor resolver completion from nearby POI data', () => {
     const state = createBaseState()
-    state.attractions = [
-      {
-        name: '西湖',
-        address: '杭州',
-        category: '风景名胜',
-      },
-    ]
-    state.hotels = [
-      {
-        name: '杭州酒店',
-        address: '杭州',
-        hotel_level: '舒适型',
-      },
-    ]
-    state.agents.attraction_agent = {
-      ...state.agents.attraction_agent,
+    state.attractions = [{ name: '西湖', address: '杭州', category: '风景名胜' }]
+    state.hotels = [{ name: '杭州酒店', address: '杭州', hotel_level: '舒适型' }]
+    state.agents.nearby_poi_agent = {
+      ...state.agents.nearby_poi_agent,
       status: 'running',
       progress: 45,
     }
-    state.agents.hotel_agent = {
-      ...state.agents.hotel_agent,
+    state.agents.weather_agent = {
+      ...state.agents.weather_agent,
       status: 'completed',
       progress: 100,
     }
@@ -76,23 +55,23 @@ describe('PlanningFlow', () => {
     const wrapper = mount(PlanningFlow, {
       props: {
         state,
-        currentStageLabel: '并行召回景点、酒店与天气',
-        activeAgentId: 'attraction_agent',
+        currentStageLabel: '周边补全',
+        activeAgentId: 'nearby_poi_agent',
       },
     })
 
-    expect(wrapper.text()).toMatch(/评审压缩\s*等待中/)
+    expect(wrapper.text()).toMatch(/锚点验真\s*等待中/)
   })
 
-  it('renders a directional workflow graph with visible branch edges', () => {
+  it('renders a stage board without graph connectors or duplicate stage strip', () => {
     const state = createBaseState()
     state.agents.orchestrator = {
       ...state.agents.orchestrator,
       status: 'completed',
       progress: 100,
     }
-    state.agents.attraction_agent = {
-      ...state.agents.attraction_agent,
+    state.agents.nearby_poi_agent = {
+      ...state.agents.nearby_poi_agent,
       status: 'running',
       progress: 45,
     }
@@ -100,33 +79,66 @@ describe('PlanningFlow', () => {
     const wrapper = mount(PlanningFlow, {
       props: {
         state,
-        currentStageLabel: '并行召回景点、酒店与天气',
-        activeAgentId: 'attraction_agent',
+        currentStageLabel: '周边补全',
+        activeAgentId: 'nearby_poi_agent',
       },
     })
 
-    expect(wrapper.find('[data-testid="workflow-graph-canvas"]').exists()).toBe(true)
-    expect(wrapper.findAll('[data-workflow-node]')).toHaveLength(10)
-    expect(wrapper.findAll('[data-workflow-edge]')).toHaveLength(11)
-    expect(wrapper.findAll('[data-workflow-edge-underlay]')).toHaveLength(11)
-    expect(wrapper.get('[data-workflow-edge="orchestrator-to-attraction_agent"]').classes()).toContain('is-active')
-    const activeMarker = wrapper.get('[data-testid="workflow-arrow-active"]')
-    expect(activeMarker.attributes('markerWidth')).toBe('24')
-    expect(activeMarker.attributes('markerHeight')).toBe('24')
-    expect(activeMarker.get('path').attributes('d')).toBe('M3 3L21 12L3 21Z')
+    expect(wrapper.find('[data-testid="orchestrator-loop"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="workflow-lines"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid="stage-connector"]')).toHaveLength(0)
+    expect(wrapper.find('[data-testid="repair-loop"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="repair-notice"]').exists()).toBe(true)
+    expect(wrapper.find('.stage-strip').exists()).toBe(false)
+    expect(wrapper.find('[data-workflow-node="orchestrator"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-worker-node]')).toHaveLength(6)
+    expect(wrapper.find('[data-workflow-node="repair_router"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('审核不通过会回到主控生成下一批修复任务')
+    expect(wrapper.text()).toContain('输入')
+    expect(wrapper.text()).toContain('输出')
+  })
 
-    wrapper.findAll('[data-workflow-edge]').forEach((edge) => {
-      expect(edge.attributes('d')).toContain('C')
+  it('renders evaluator status and current repair round', () => {
+    const state = createBaseState()
+    state.messages = ['第1轮定向修复: route_matrix_agent']
+    state.agents.plan_evaluator_agent = {
+      ...state.agents.plan_evaluator_agent,
+      status: 'completed',
+      progress: 100,
+      counts: { score: 72, issues: 2, repairs: 1 },
+    }
+    state.agents.orchestrator = {
+      ...state.agents.orchestrator,
+      status: 'running',
+      progress: 72,
+      logs: ['第1轮定向修复: route_matrix_agent'],
+    }
+
+    const wrapper = mount(PlanningFlow, {
+      props: {
+        state,
+        currentStageLabel: '定向修复',
+        activeAgentId: 'orchestrator',
+      },
     })
-    ;[
-      'start-to-orchestrator',
-      'reviewer_agent-to-restaurant_agent',
-      'restaurant_agent-to-transport_agent',
-      'transport_agent-to-final_planning',
-      'final_planning-to-finish',
-    ].forEach((edgeId) => {
-      expect(horizontalSpread(wrapper.get(`[data-workflow-edge="${edgeId}"]`).attributes('d'))).toBeLessThanOrEqual(16)
+
+    expect(wrapper.get('[data-workflow-node="plan_evaluator_agent"]').text()).toContain('方案审核')
+    expect(wrapper.text()).toContain('第 1 轮修复')
+    expect(wrapper.text()).toContain('主控调度')
+  })
+
+  it('surfaces max repair exhaustion as an explicit planning risk', () => {
+    const state = createBaseState()
+    state.messages = ['已达到最大修复轮(3)，方案仍存在审核风险，将带风险说明成稿']
+
+    const wrapper = mount(PlanningFlow, {
+      props: {
+        state,
+        currentStageLabel: '生成最终行程',
+      },
     })
-    expect(wrapper.get('[data-workflow-node="attraction_agent"]').classes()).toContain('is-active')
+
+    expect(wrapper.get('[data-testid="planning-risk"]').text()).toContain('方案仍存在审核风险')
+    expect(wrapper.get('[data-testid="planning-risk"]').text()).toContain('最大修复轮')
   })
 })

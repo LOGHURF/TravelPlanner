@@ -1,0 +1,256 @@
+.workflow-shell {
+  display: grid;
+  gap: 18px;
+  border-top: 1px solid #d7e3ef;
+  padding-top: 18px;
+}
+
+.workflow-shell__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.workflow-shell__header h3 {
+  font-size: 16px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.workflow-shell__header p {
+  margin-top: 4px;
+  max-width: 760px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #52657a;
+}
+
+.workflow-shell__header > span,
+.repair-notice {
+  border: 1px solid #d7e3ef;
+  background: #ffffff;
+}
+
+.workflow-shell__header > span {
+  white-space: nowrap;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #35506b;
+}
+
+.stage-board {
+  display: grid;
+  grid-template-columns: 0.9fr 1.2fr 1.2fr 0.96fr;
+  gap: 14px;
+}
+
+.stage-column__head > span {
+  display: inline-flex;
+  height: 28px;
+  min-width: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #e8f5fb;
+  color: #0b78b6;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.stage-column {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.stage-column__head {
+  display: flex;
+  gap: 10px;
+  min-height: 70px;
+  border-bottom: 1px solid #dce7f1;
+  padding-bottom: 12px;
+}
+
+.stage-column__head h4 {
+  font-size: 15px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.stage-column__head p {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #5f7185;
+}
+
+.stage-column__cards {
+  display: grid;
+  gap: 12px;
+}
+
+.agent-card {
+  display: grid;
+  min-height: 142px;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 10px;
+  border: 1px solid #d2dfeb;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 12px;
+  text-align: left;
+  color: #475569;
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.agent-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px rgb(15 23 42 / 0.08);
+}
+
+.agent-card__icon {
+  display: inline-flex;
+  height: 36px;
+  width: 36px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: #eef6fb;
+  color: #3d6f8f;
+}
+
+.agent-card__icon svg {
+  height: 19px;
+  width: 19px;
+}
+
+.agent-card__copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.agent-card__copy strong {
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.2;
+  color: #0f172a;
+}
+
+.agent-card__copy span {
+  width: fit-content;
+  border-radius: 999px;
+  background: #edf5fa;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #35506b;
+}
+
+.agent-card__copy small {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #5f7185;
+}
+
+.agent-card__copy em {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 6px;
+  font-style: normal;
+  font-size: 11px;
+  line-height: 1.35;
+  color: #64748b;
+}
+
+.agent-card__copy em b {
+  font-weight: 700;
+  color: #1d4f73;
+}
+
+.agent-card.is-running,
+.agent-card.is-active {
+  border-color: #0ea5e9;
+  box-shadow: 0 0 0 3px rgb(14 165 233 / 0.14);
+}
+
+.agent-card.is-running .agent-card__icon,
+.agent-card.is-active .agent-card__icon {
+  background: #0ea5e9;
+  color: #ffffff;
+}
+
+.agent-card.is-completed {
+  border-color: #77d7be;
+  background: #f2fffb;
+}
+
+.agent-card.is-completed .agent-card__icon {
+  background: #dcfce7;
+  color: #047857;
+}
+
+.agent-card.is-error {
+  border-color: #fda4af;
+  background: #fff1f2;
+}
+
+.agent-card.is-error .agent-card__icon {
+  background: #ffe4e6;
+  color: #be123c;
+}
+
+.repair-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border-color: #dfad63;
+  border-radius: 10px;
+  background: #fff8eb;
+  padding: 12px;
+  color: #8a560f;
+}
+
+.repair-notice svg {
+  height: 18px;
+  width: 18px;
+  flex: 0 0 auto;
+}
+
+.repair-notice strong,
+.repair-notice span {
+  display: block;
+}
+
+.repair-notice strong {
+  font-size: 13px;
+}
+
+.repair-notice span {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@media (max-width: 1180px) {
+  .stage-board {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .workflow-shell__header {
+    display: grid;
+  }
+
+  .stage-board {
+    grid-template-columns: 1fr;
+  }
+}

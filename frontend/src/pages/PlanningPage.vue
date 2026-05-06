@@ -43,9 +43,9 @@ const headlineCopy = computed(() => {
     return plannerStore.state.error || '规划出现异常'
   }
   if (isCompleted.value) {
-    return '多 Agent 数据已经收敛完成，可以直接进入结果页。'
+    return 'Orchestrator 已收敛所有 Worker 输出，最终结果已生成。'
   }
-  return '系统正在按“需求拆解 → 并行召回 → 评审压缩 → 动线成稿”的顺序生成你的行程。'
+  return '主控按批次派发规划节点，方案审核不通过时会回到主控，定向重跑需要修复的节点。'
 })
 
 onMounted(async () => {

@@ -50,6 +50,14 @@ function cardTone(category?: string) {
   if (value.includes('娱乐') || value.includes('休闲')) return 'activity-card--amber'
   return 'activity-card--blue'
 }
+
+function formatMealAnchor(meal: DailyPlan['meals'][number]) {
+  const distance = Number(meal.distance_to_anchor_km || 0)
+  if (!meal.meal_anchor_name || distance <= 0) {
+    return ''
+  }
+  return `距 ${meal.meal_anchor_name} ${distance.toFixed(1)} km`
+}
 </script>
 
 <template>
@@ -178,6 +186,7 @@ function cardTone(category?: string) {
             <div class="detail-item__copy">
               <strong>{{ meal.name }}</strong>
               <span>{{ meal.cuisine_type || meal.meal_type || meal.type }}</span>
+              <span v-if="formatMealAnchor(meal)">{{ formatMealAnchor(meal) }}</span>
             </div>
           </article>
         </div>

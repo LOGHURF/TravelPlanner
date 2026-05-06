@@ -10,7 +10,7 @@ describe('parseSSEPayload', () => {
     const payload = [
       'data: {"type":"progress","message":"开始规划"}',
       '',
-      'data: {"type":"agent_start","agentId":"attraction_agent","label":"景点 Agent","status":"running","progress":12}',
+      'data: {"type":"agent_start","agentId":"strategy_agent","label":"策略规划","status":"running","progress":12}',
       '',
       'data: {"type":"done"}',
     ].join('\n')
@@ -19,8 +19,8 @@ describe('parseSSEPayload', () => {
       { type: 'progress', message: '开始规划' },
       {
         type: 'agent_start',
-        agentId: 'attraction_agent',
-        label: '景点 Agent',
+        agentId: 'strategy_agent',
+        label: '策略规划',
         status: 'running',
         progress: 12,
       },

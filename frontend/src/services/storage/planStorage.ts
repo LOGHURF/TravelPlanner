@@ -329,6 +329,7 @@ function renderDayCard(day: DailyPlan): string {
       item.cuisine_type,
       item.price_per_person ? `人均 ${formatMoney(item.price_per_person)}` : '',
       item.address || '',
+      item.meal_anchor_name && item.distance_to_anchor_km ? `距 ${item.meal_anchor_name} ${formatDistance(item.distance_to_anchor_km)}` : '',
     ]
       .filter(Boolean)
       .join(' · ')

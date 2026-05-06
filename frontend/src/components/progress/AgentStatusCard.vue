@@ -11,6 +11,7 @@ import {
   Loader2,
   Route,
   Search,
+  MapPinned,
   UtensilsCrossed,
   XCircle,
 } from 'lucide-vue-next'
@@ -31,12 +32,13 @@ const emit = defineEmits<{
 
 const iconMap: Partial<Record<PlanningAgentId, typeof Bot>> = {
   orchestrator: Bot,
-  attraction_agent: Search,
-  restaurant_agent: UtensilsCrossed,
-  hotel_agent: BedDouble,
+  strategy_agent: Search,
+  anchor_resolver_agent: MapPinned,
+  nearby_poi_agent: UtensilsCrossed,
+  route_matrix_agent: Route,
+  itinerary_composer_agent: BedDouble,
   weather_agent: CloudSun,
-  reviewer_agent: Calculator,
-  transport_agent: Route,
+  plan_evaluator_agent: Calculator,
   final_planning: FileText,
 }
 

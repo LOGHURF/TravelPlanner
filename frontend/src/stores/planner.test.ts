@@ -25,17 +25,17 @@ describe('planner store agent progress', () => {
 
     store.applyProgress({
       type: 'agent_start',
-      agentId: 'attraction_agent',
-      label: '景点 Agent',
+      agentId: 'nearby_poi_agent',
+      label: '周边补全',
       status: 'running',
       progress: 12,
-      message: '景点 Agent已开始处理',
+      message: '周边补全已开始处理',
       timestamp: '2026-03-03T10:00:00Z',
     })
     store.applyProgress({
       type: 'agent_progress',
-      agentId: 'attraction_agent',
-      label: '景点 Agent',
+      agentId: 'nearby_poi_agent',
+      label: '周边补全',
       status: 'running',
       progress: 72,
       message: '正在筛选景点候选',
@@ -43,16 +43,16 @@ describe('planner store agent progress', () => {
     })
     store.applyProgress({
       type: 'agent_result',
-      agentId: 'attraction_agent',
-      label: '景点 Agent',
+      agentId: 'nearby_poi_agent',
+      label: '周边补全',
       status: 'running',
       progress: 86,
       counts: { items: 4 },
     })
     store.applyProgress({
       type: 'agent_done',
-      agentId: 'attraction_agent',
-      label: '景点 Agent',
+      agentId: 'nearby_poi_agent',
+      label: '周边补全',
       status: 'completed',
       progress: 100,
       message: '已完成当前阶段处理',
@@ -60,7 +60,7 @@ describe('planner store agent progress', () => {
       timestamp: '2026-03-03T10:00:02Z',
     })
 
-    const agent = store.state.agents.attraction_agent
+    const agent = store.state.agents.nearby_poi_agent
     expect(agent.status).toBe('completed')
     expect(agent.progress).toBe(100)
     expect(agent.logs).toContain('正在筛选景点候选')
@@ -76,28 +76,28 @@ describe('planner store agent progress', () => {
 
     store.applyProgress({
       type: 'agent_start',
-      agentId: 'attraction_agent',
-      label: '景点 Agent',
-      phase: 'parallel',
+      agentId: 'strategy_agent',
+      label: '策略规划',
+      phase: 'prepare',
       status: 'running',
       progress: 20,
-      message: '开始召回景点候选',
+      message: '开始生成片区策略',
       timestamp: '2026-03-03T10:00:00Z',
     })
     store.applyProgress({
       type: 'agent_start',
-      agentId: 'hotel_agent',
-      label: '酒店 Agent',
-      phase: 'parallel',
+      agentId: 'anchor_resolver_agent',
+      label: '锚点验真',
+      phase: 'refine',
       status: 'running',
       progress: 20,
-      message: '开始召回酒店候选',
+      message: '开始验证锚点',
       timestamp: '2026-03-03T10:00:01Z',
     })
     store.applyProgress({
       type: 'agent_start',
       agentId: 'weather_agent',
-      label: '天气 Agent',
+      label: '天气检查',
       phase: 'parallel',
       status: 'running',
       progress: 20,
@@ -116,7 +116,7 @@ describe('planner store agent progress', () => {
     })
 
     expect(store.activeAgentId).toBe('weather_agent')
-    expect(store.currentStageLabel).toBe('并行召回景点、酒店与天气')
+    expect(store.currentStageLabel).toBe('天气检查')
     expect(store.recentEvents[0]?.message).toBe('酒店结果已更新（1项）')
     expect(store.recentEvents[1]?.message).toBe('景点结果已更新（2项）')
 
@@ -147,7 +147,7 @@ describe('planner store agent progress', () => {
     store.applyProgress({
       type: 'agent_progress',
       agentId: 'weather_agent',
-      label: '天气 Agent',
+      label: '天气检查',
       phase: 'enrich',
       status: 'running',
       message: '天气完成:3天',
@@ -197,13 +197,54 @@ describe('planner store agent progress', () => {
     expect(store.state.agents.final_planning.counts).toEqual({ days: 0, attractions: 0 })
   })
 
+  it('tracks evaluator and orchestrator-driven repair dispatch', () => {
+    const store = usePlannerStore()
+    store.setRequest(request)
+
+    store.applyProgress({
+      type: 'agent_start',
+      agentId: 'plan_evaluator_agent',
+      label: '方案审核',
+      phase: 'evaluate',
+      status: 'running',
+      progress: 12,
+      message: '开始审核完整方案',
+    })
+    store.applyProgress({
+      type: 'agent_result',
+      agentId: 'plan_evaluator_agent',
+      label: '方案审核',
+      phase: 'evaluate',
+      status: 'running',
+      progress: 86,
+      counts: { score: 72, issues: 2, repairs: 1 },
+    })
+    store.applyProgress({
+      type: 'agent_progress',
+      agentId: 'orchestrator',
+      label: '主控调度',
+      phase: 'prepare',
+      status: 'running',
+      progress: 72,
+      message: '第1轮定向修复: route_matrix_agent',
+    })
+
+    expect(store.state.agents.plan_evaluator_agent.counts).toEqual({
+      score: 72,
+      issues: 2,
+      repairs: 1,
+    })
+    expect(store.currentStageLabel).toBe('定向修复')
+    expect(store.activeAgentId).toBe('orchestrator')
+  })
+
   it('does not let a done event hide an earlier stream error', () => {
     const store = usePlannerStore()
     store.setRequest(request)
 
     store.applyProgress({
       type: 'agent_start',
-      agentId: 'attraction_agent',
+      agentId: 'strategy_agent',
       status: 'running',
       progress: 30,
     })
@@ -257,6 +298,60 @@ describe('planner store agent progress', () => {
     expect(store.state.step).toBe('completed')
     expect(store.hasStarted).toBe(true)
     expect(store.isStreaming).toBe(false)
+  })
+
+  it('migrates legacy snapshots without crashing active stage getters', () => {
+    const store = usePlannerStore()
+
+    store.restoreSnapshot(request, {
+      step: 'planning',
+      progress: 32,
+      messages: ['旧流程快照'],
+      eventLog: [
+        {
+          id: 'legacy-1',
+          eventType: 'agent_done',
+          agentId: 'removed_stage' as never,
+          message: '旧阶段完成',
+        },
+      ],
+      agents: {
+        removed_stage: {
+          id: 'removed_stage',
+          label: '旧阶段',
+          phase: 'route',
+          description: '旧流程',
+          status: 'completed',
+          progress: 100,
+          logs: ['旧日志'],
+          counts: {},
+        },
+      } as never,
+      attractions: [],
+      hotels: [],
+      restaurants: [],
+      weather: [],
+    })
+
+    expect(store.state.eventLog).toHaveLength(0)
+    expect(store.state.agents.strategy_agent).toBeDefined()
+    expect(store.activeAgentId).toBe('orchestrator')
+    expect(store.currentStageLabel).toBe('主控调度')
+  })
+
+  it('surfaces unknown live agent events as explicit contract errors', () => {
+    const store = usePlannerStore()
+    store.setRequest(request)
+
+    store.applyProgress({
+      type: 'agent_start',
+      agentId: 'removed_stage' as never,
+      status: 'running',
+      progress: 12,
+    })
+
+    expect(store.state.step).toBe('error')
+    expect(store.state.error).toBe('收到未知规划阶段: removed_stage')
   })
 
   it('keeps event log ids unique after the capped log starts trimming older entries', () => {

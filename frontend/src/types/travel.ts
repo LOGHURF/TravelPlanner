@@ -65,6 +65,9 @@ export interface Restaurant {
   price_per_person?: number
   cuisine_type?: string
   is_recommended?: boolean
+  meal_anchor_name?: string
+  meal_anchor_role?: string
+  distance_to_anchor_km?: number
   photo?: string
 }
 
@@ -185,12 +188,13 @@ export interface TripPlan {
 
 export type PlanningAgentId =
   | 'orchestrator'
-  | 'attraction_agent'
-  | 'hotel_agent'
-  | 'reviewer_agent'
-  | 'restaurant_agent'
-  | 'transport_agent'
+  | 'strategy_agent'
+  | 'anchor_resolver_agent'
+  | 'nearby_poi_agent'
+  | 'route_matrix_agent'
+  | 'itinerary_composer_agent'
   | 'weather_agent'
+  | 'plan_evaluator_agent'
   | 'final_planning'
 
 export type PlanningAgentStatus = 'pending' | 'running' | 'completed' | 'error'
@@ -198,7 +202,7 @@ export type PlanningAgentStatus = 'pending' | 'running' | 'completed' | 'error'
 export interface PlanningAgentDefinition {
   id: PlanningAgentId
   label: string
-  phase: 'prepare' | 'parallel' | 'refine' | 'enrich' | 'route' | 'finalize'
+  phase: 'prepare' | 'parallel' | 'refine' | 'enrich' | 'route' | 'evaluate' | 'repair' | 'finalize'
   weight: number
   description: string
 }

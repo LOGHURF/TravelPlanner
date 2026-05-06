@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import {
   createPlanningAgents,
+  planningAgentDefinitionMap,
   planningAgentDefinitions,
 } from '@/constants/planningAgents'
 import { streamTravelPlan } from '@/services/api/planner'
@@ -15,6 +16,7 @@ import type {
   PlanningAgentId,
   PlanningEventRecord,
   PlanningProgress,
+  PlanningAgentState,
   PlanningResultHighlight,
   PlanningState,
   Restaurant,
@@ -26,12 +28,14 @@ import type {
 const MAX_EVENT_LOG = 24
 
 const STAGE_LABELS = {
-  prepare: '拆解需求与生成检索参数',
-  parallel: '并行召回景点、酒店与天气',
-  refine: '评审候选结果',
-  enrich: '补充餐饮信息',
-  route: '规划城市内交通动线',
-  finalize: '生成最终行程',
+  prepare: '主控调度',
+  parallel: '天气检查',
+  refine: '锚点验真',
+  enrich: '周边补全',
+  route: '路线体检 / 行程拼装',
+  evaluate: '方案审核',
+  repair: '定向修复',
+  finalize: '最终成稿',
 } as const
 
 function createIdleState(): PlanningState {
@@ -71,6 +75,16 @@ function resolveCountSummary(counts: Record<string, number>) {
           return `${value} 景点`
         case 'hotels':
           return `${value} 酒店`
+        case 'score':
+          return `${value} 分`
+        case 'issues':
+          return `${value} 问题`
+        case 'repairs':
+          return `${value} 修复`
+        case 'iteration':
+          return `第 ${value} 轮`
+        case 'targets':
+          return `${value} 目标`
         default:
           return `${value} ${key}`
       }
@@ -96,12 +110,49 @@ function parseEventRecordSequence(id?: string) {
   return Number.isFinite(sequence) ? sequence : null
 }
 
+function isKnownAgentId(agentId?: string): agentId is PlanningAgentId {
+  return Boolean(agentId && planningAgentDefinitionMap[agentId as PlanningAgentId])
+}
+
+function normalizePlanningAgents(
+  agents?: Partial<Record<string, Partial<PlanningAgentState>>>,
+): Record<PlanningAgentId, PlanningAgentState> {
+  const currentAgents = createPlanningAgents()
+  if (!agents) {
+    return currentAgents
+  }
+
+  for (const definition of planningAgentDefinitions) {
+    const restored = agents[definition.id]
+    if (!restored) {
+      continue
+    }
+
+    currentAgents[definition.id] = {
+      ...currentAgents[definition.id],
+      status: restored.status || currentAgents[definition.id].status,
+      progress: Number(restored.progress || 0),
+      logs: Array.isArray(restored.logs) ? restored.logs : [],
+      counts: restored.counts || {},
+      lastMessage: restored.lastMessage,
+      startedAt: restored.startedAt,
+      finishedAt: restored.finishedAt,
+    }
+  }
+
+  return currentAgents
+}
+
 function normalizeEventLog(records: PlanningEventRecord[]) {
   const normalized: PlanningEventRecord[] = []
   const seen = new Set<string>()
   let nextSequence = 0
 
   for (const record of records) {
+    if (record.agentId && !isKnownAgentId(record.agentId)) {
+      continue
+    }
+
     const parsedSequence = parseEventRecordSequence(record.id)
     if (parsedSequence !== null) {
       nextSequence = Math.max(nextSequence, parsedSequence + 1)
@@ -368,7 +419,8 @@ export const usePlannerStore = defineStore('planner', {
           if (!['agent_start', 'agent_progress'].includes(record.eventType)) {
             return false
           }
-          return store.state.agents[record.agentId].status === 'running'
+          const agent = store.state.agents[record.agentId]
+          return Boolean(agent && agent.status === 'running')
         })
 
       if (latestRunningRecord?.agentId) {
@@ -377,7 +429,7 @@ export const usePlannerStore = defineStore('planner', {
 
       const latestCompletedRecord = [...store.state.eventLog]
         .reverse()
-        .find((record) => record.agentId && record.eventType === 'agent_done')
+        .find((record) => record.agentId && isKnownAgentId(record.agentId) && record.eventType === 'agent_done')
 
       if (latestCompletedRecord?.agentId) {
         return latestCompletedRecord.agentId
@@ -405,7 +457,13 @@ export const usePlannerStore = defineStore('planner', {
         return STAGE_LABELS.parallel
       }
 
-      const activeAgent = this.state.agents[this.activeAgentId]
+      const activeAgent = this.state.agents[this.activeAgentId] || this.state.agents.orchestrator
+      if (
+        this.activeAgentId === 'orchestrator' &&
+        activeAgent.logs.some((line) => line.includes('定向修复'))
+      ) {
+        return STAGE_LABELS.repair
+      }
       return STAGE_LABELS[activeAgent.phase] || '准备开始规划'
     },
     resultHighlights(): PlanningResultHighlight[] {
@@ -413,21 +471,19 @@ export const usePlannerStore = defineStore('planner', {
       const attractionStatus =
         this.state.attractions.length === 0
           ? 'empty'
-          : this.state.agents.attraction_agent.status === 'completed' ||
-              this.state.agents.reviewer_agent.status === 'completed'
+          : this.state.agents.nearby_poi_agent.status === 'completed'
             ? 'ready'
             : 'partial'
       const hotelStatus =
         this.state.hotels.length === 0
           ? 'empty'
-          : this.state.agents.hotel_agent.status === 'completed' ||
-              this.state.agents.reviewer_agent.status === 'completed'
+          : this.state.agents.nearby_poi_agent.status === 'completed'
             ? 'ready'
             : 'partial'
       const restaurantStatus =
         this.state.restaurants.length === 0
           ? 'empty'
-          : this.state.agents.restaurant_agent.status === 'completed'
+          : this.state.agents.nearby_poi_agent.status === 'completed'
             ? 'ready'
             : 'partial'
       const weatherStatus =
@@ -439,7 +495,7 @@ export const usePlannerStore = defineStore('planner', {
       const routeStatus =
         routeDays === 0
           ? 'empty'
-          : this.state.agents.transport_agent.status === 'completed'
+          : this.state.agents.itinerary_composer_agent.status === 'completed'
             ? 'ready'
             : 'partial'
 
@@ -533,6 +589,7 @@ export const usePlannerStore = defineStore('planner', {
       this.state = {
         ...createIdleState(),
         ...snapshot,
+        agents: normalizePlanningAgents(snapshot.agents),
         eventLog: normalized.eventLog,
       }
       this.isStreaming = false
@@ -570,6 +627,12 @@ export const usePlannerStore = defineStore('planner', {
           }
 
           const currentAgent = nextState.agents[event.agentId]
+          if (!currentAgent) {
+            nextState.step = 'error'
+            nextState.error = `收到未知规划阶段: ${event.agentId}`
+            break
+          }
+
           const agentLabel = event.label || currentAgent.label
           const nextLogs = [...currentAgent.logs]
 
@@ -629,20 +692,20 @@ export const usePlannerStore = defineStore('planner', {
         }
         case 'attractions':
           nextState.attractions = Array.isArray(event.data) ? event.data : []
-          assignAgentCounts(nextState, 'attraction_agent', {
-            items: nextState.attractions.length,
+          assignAgentCounts(nextState, 'nearby_poi_agent', {
+            attractions: nextState.attractions.length,
           })
           break
         case 'hotels':
           nextState.hotels = Array.isArray(event.data) ? event.data : []
-          assignAgentCounts(nextState, 'hotel_agent', {
-            items: nextState.hotels.length,
+          assignAgentCounts(nextState, 'nearby_poi_agent', {
+            hotels: nextState.hotels.length,
           })
           break
         case 'restaurants':
           nextState.restaurants = Array.isArray(event.data) ? event.data : []
-          assignAgentCounts(nextState, 'restaurant_agent', {
-            items: nextState.restaurants.length,
+          assignAgentCounts(nextState, 'nearby_poi_agent', {
+            restaurants: nextState.restaurants.length,
           })
           break
         case 'weather':
@@ -653,7 +716,7 @@ export const usePlannerStore = defineStore('planner', {
           break
         case 'routes':
           nextState.routes = (event.data as PlanningState['routes']) || undefined
-          assignAgentCounts(nextState, 'transport_agent', resolveTransportCounts(nextState.routes))
+          assignAgentCounts(nextState, 'itinerary_composer_agent', resolveTransportCounts(nextState.routes))
           break
         case 'itinerary':
           nextState.itinerary = (event.data as TripPlan) || undefined
