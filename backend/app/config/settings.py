@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     # 服务端口
     PORT: int = 8000
 
+    # 前端开发服务器允许的跨域来源，使用逗号分隔
+    CORS_ALLOWED_ORIGINS: str = "http://127.0.0.1:5173,http://localhost:5173"
+
     # ==================== LLM 配置 ====================
     # DeepSeek API Key
     DEEPSEEK_API_KEY: str = ""
@@ -73,6 +76,16 @@ class Settings(BaseSettings):
     def amap_key(self) -> str:
         """获取高德 API Key（优先使用 AMAP_MAPS_API_KEY）"""
         return self.AMAP_MAPS_API_KEY or self.AMAP_API_KEY
+
+    @computed_field
+    @property
+    def cors_allowed_origins(self) -> list[str]:
+        """解析允许跨域访问后端的前端来源。"""
+        return [
+            origin.strip()
+            for origin in self.CORS_ALLOWED_ORIGINS.split(",")
+            if origin.strip()
+        ]
 
     # ==================== MCP 配置 ====================
     # MCP 服务器 URL

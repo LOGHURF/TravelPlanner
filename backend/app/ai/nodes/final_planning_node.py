@@ -3,10 +3,10 @@
 负责生成最终 TripPlan 结构：
 1. 分配每日景点/餐厅/酒店到具体日期
 2. 生成每日时间线和费用估算
-3. LLM 生成行程总结和建议
+3. 确定性生成行程总结和建议
 
 图结构位置：
-- 接收 transport_node 的输出
+- 接收 itinerary_composer 输出的 transport 结构
 - 输出完整 TripPlan 到状态
 - 连接到最终输出/前端展示
 """
@@ -17,6 +17,8 @@ import json
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+from pydantic import BaseModel, Field, field_validator
+
 from app.config import get_logger
 from app.ai.models.graph_models import TripState
 from app.ai.utils import (
@@ -24,11 +26,29 @@ from app.ai.utils import (
     distribute_attractions,
     distribute_hotels,
     distribute_restaurants,
-    invoke_prompt_json_async,
     sum_route_segment_cost,
 )
 
 logger = get_logger("FinalPlanning")
+
+
+class FinalSummaryOutput(BaseModel):
+    overall_suggestions: str = Field(min_length=1)
+    important_notes: List[str] = Field(min_length=1)
+    packing_tips: List[str] = Field(min_length=1)
+    narrative_plan: str = Field(min_length=1)
+
+    @field_validator("overall_suggestions", "narrative_plan", mode="before")
+    @classmethod
+    def strip_required_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+    @field_validator("important_notes", "packing_tips", mode="before")
+    @classmethod
+    def strip_required_list(cls, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            raise ValueError("summary list field must be a list")
+        return [str(item).strip() for item in value if str(item).strip()]
 
 
 def parse_date(date_str: str) -> datetime:
@@ -123,6 +143,9 @@ def _normalize_meal(item: dict[str, Any]) -> dict[str, Any]:
         "price_per_person": item.get("price_per_person", 0),
         "cuisine_type": item.get("cuisine_type", ""),
         "is_recommended": item.get("is_recommended", False),
+        "meal_anchor_name": item.get("meal_anchor_name", ""),
+        "meal_anchor_role": item.get("meal_anchor_role", ""),
+        "distance_to_anchor_km": item.get("distance_to_anchor_km", 0),
         "photo": item.get("photo", "") or ((item.get("photos") or [""])[0]),
     }
 
@@ -198,6 +221,7 @@ def _build_summary_prompt_variables(
     restaurants: list[dict[str, Any]],
     weather: list[dict[str, Any]],
     days: int,
+    evaluation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """构造行程总结提示词变量"""
     context = {
@@ -210,24 +234,77 @@ def _build_summary_prompt_variables(
         "selected_hotels": [h.get("name", "") for h in hotels[: min(3, len(hotels))]],
         "restaurant_recommendations": [r.get("name", "") for r in restaurants[: min(days * 2, len(restaurants))]],
         "weather_brief": weather[: min(3, len(weather))],
+        "evaluation": evaluation or {},
     }
     return {
         "context_json": json.dumps(context, ensure_ascii=False),
     }
 
 
-def _build_fallback_narrative(*, destination: str, daily_plans: list[dict[str, Any]]) -> str:
-    """无 LLM 时生成备选行程叙述"""
-    lines: list[str] = [f"{destination}行程概览"]
-    for daily in daily_plans:
-        spots = [item.get("name", "") for item in (daily.get("attractions") or []) if item.get("name")]
-        hotel_name = ((daily.get("hotel") or {}).get("name") or "").strip()
-        summary = "、".join(spots[:2]) if spots else "自由安排"
-        line = f"Day {daily.get('day_index', 1)}：{summary}"
-        if hotel_name:
-            line += f"，入住 {hotel_name}"
-        lines.append(line)
-    return "\n".join(lines).strip()
+def _first_names(items: list[dict[str, Any]], limit: int) -> list[str]:
+    names: list[str] = []
+    for item in items:
+        name = str(item.get("name", "") or "").strip()
+        if name and name not in names:
+            names.append(name)
+        if len(names) >= limit:
+            break
+    return names
+
+
+def _build_final_summary(
+    *,
+    request: dict[str, Any],
+    daily_plans: list[dict[str, Any]],
+    hotels: list[dict[str, Any]],
+    restaurants: list[dict[str, Any]],
+    weather: list[dict[str, Any]],
+    days: int,
+) -> FinalSummaryOutput:
+    destination = str(request.get("destination", "") or "目的地").strip()
+    companions = str(request.get("companions", "") or "出行人").strip()
+    pace = str(request.get("pace", "") or "适中").strip()
+    attraction_names = _first_names(
+        [
+            attraction
+            for day in daily_plans
+            for attraction in list(day.get("attractions") or [])
+            if isinstance(attraction, dict)
+        ],
+        4,
+    )
+    meal_names = _first_names(restaurants, 3)
+    hotel_names = _first_names(hotels, 2)
+
+    route_text = "、".join(attraction_names) if attraction_names else "每日核心片区"
+    meal_text = "、".join(meal_names) if meal_names else "周边餐饮"
+    hotel_text = "、".join(hotel_names) if hotel_names else "已选住宿"
+    overall = f"{destination}{days}天行程按{pace}节奏组织，围绕{route_text}安排游览，并结合{meal_text}和{hotel_text}落地。"
+
+    notes = ["热门景点、餐厅和酒店建议出发前再次确认营业时间、预约要求和实时价格。"]
+    if weather:
+        first_weather = weather[0]
+        day_weather = str(first_weather.get("day_weather", "") or "").strip()
+        day_temp = str(first_weather.get("day_temp", "") or "").strip()
+        if day_weather or day_temp:
+            notes.append(f"天气预报显示首日{day_weather or '天气待确认'}，白天气温{day_temp or '以实时预报为准'}，出行前请复核最新预报。")
+
+    packing = ["身份证件", "充电器和充电宝", "舒适步行鞋"]
+    if any(str(item.get("day_weather", "") or "").strip() in {"小雨", "中雨", "大雨", "阵雨", "雷阵雨"} for item in weather):
+        packing.append("雨具")
+    if companions in {"家庭", "老人"}:
+        packing.append("常用药品")
+
+    narrative = (
+        f"这趟{destination}{days}天行程以{route_text}为主线，控制单日景点数量，优先减少跨片区折返。\n\n"
+        f"餐饮安排围绕当天动线选择{meal_text}，住宿以{hotel_text}为主要落脚点，方便衔接每日出行。"
+    )
+    return FinalSummaryOutput(
+        overall_suggestions=overall,
+        important_notes=notes,
+        packing_tips=packing[:6],
+        narrative_plan=narrative,
+    )
 
 
 def resolve_trip_window(request: dict[str, Any]) -> tuple[datetime, datetime, int]:
@@ -368,38 +445,44 @@ async def final_planning_node(state: TripState) -> TripState:
         used_hotel_keys.add(key)
         used_hotels.append(hotel)
 
-    llm_default = {
-        "overall_suggestions": f"行程已压缩为每日核心双景点结构，建议结合实时天气灵活微调。",
-        "important_notes": ["热门景点建议提前预约。", "实际价格以下单时为准。"],
-        "packing_tips": ["身份证", "充电器", "舒适鞋子"],
-        "narrative_plan": "",
-    }
-    summary_variables = _build_summary_prompt_variables(
+    summary = _build_final_summary(
         request=request,
-        attractions=attractions,
+        daily_plans=daily_plans,
         hotels=used_hotels,
         restaurants=restaurants,
         weather=weather_list,
         days=days,
     )
-    llm_data = await invoke_prompt_json_async(
-        prompt_id="final_summary",
-        variables=summary_variables,
-        temperature=0.35,
-    )
 
-    notes_raw = llm_data.get("important_notes")
-    important_notes = [str(x).strip() for x in notes_raw] if isinstance(notes_raw, list) else []
-    important_notes = [x for x in important_notes if x][:5] or llm_default["important_notes"]
+    evaluation = state.get("evaluation") if isinstance(state.get("evaluation"), dict) else {}
+    warning_notes: list[str] = []
+    if state.get("final_with_warnings") or state.get("evaluation_failed_after_max_iterations"):
+        warning_notes.append("方案达到最大修复轮后仍未完全通过审核，建议人工复核后再执行。")
+        blocking_issues = evaluation.get("blocking_issues", []) if isinstance(evaluation, dict) else []
+        if isinstance(blocking_issues, list):
+            for issue in blocking_issues:
+                text = str(issue).strip()
+                if text:
+                    warning_notes.append(f"未完全解决的问题：{text}")
 
-    tips_raw = llm_data.get("packing_tips")
-    packing_tips = [str(x).strip() for x in tips_raw] if isinstance(tips_raw, list) else []
-    packing_tips = [x for x in packing_tips if x][:6] or llm_default["packing_tips"]
+    base_notes = summary.important_notes
+    residual_risks = evaluation.get("residual_risks", []) if isinstance(evaluation, dict) else []
+    residual_notes: list[str] = []
+    if isinstance(residual_risks, list):
+        for risk in residual_risks:
+            text = str(risk).strip()
+            if text:
+                residual_notes.append(text)
 
-    overall_suggestions = str(llm_data.get("overall_suggestions", "")).strip() or llm_default["overall_suggestions"]
-    narrative_plan = str(llm_data.get("narrative_plan", "")).strip()
-    if not narrative_plan:
-        narrative_plan = _build_fallback_narrative(destination=destination, daily_plans=daily_plans)
+    important_notes: list[str] = []
+    for note in warning_notes + base_notes + residual_notes:
+        if note and note not in important_notes:
+            important_notes.append(note)
+    important_notes = important_notes[:7]
+
+    packing_tips = summary.packing_tips[:6]
+    overall_suggestions = summary.overall_suggestions
+    narrative_plan = summary.narrative_plan
     overall_suggestions = f"{overall_suggestions}（已结合候选结果做精简整理）"
 
     trip_plan = {
@@ -440,6 +523,6 @@ async def final_planning_node(state: TripState) -> TripState:
         len(attractions),
         len(hotels),
         estimated_total,
-        True,
+        False,
     )
     return state

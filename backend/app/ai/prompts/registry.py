@@ -7,21 +7,15 @@ from string import Template
 from typing import Any, Literal
 
 PromptId = Literal[
-    "hotel_filter",
-    "restaurant_filter",
-    "reviewer_selection",
-    "selection_retry",
-    "transport_plan",
+    "travel_strategy",
+    "plan_evaluator",
     "final_summary",
 ]
 
 _TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 _TEMPLATE_FILES: dict[str, str] = {
-    "hotel_filter": "hotel_filter.md",
-    "restaurant_filter": "restaurant_filter.md",
-    "reviewer_selection": "reviewer_selection.md",
-    "selection_retry": "selection_retry.md",
-    "transport_plan": "transport_plan.md",
+    "travel_strategy": "travel_strategy.md",
+    "plan_evaluator": "plan_evaluator.md",
     "final_summary": "final_summary.md",
 }
 

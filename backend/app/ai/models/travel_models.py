@@ -368,6 +368,11 @@ class Restaurant(BaseModel):
     cuisine_type: str = Field(default="", description="菜系：川菜/粤菜/本地菜...")
     is_recommended: bool = Field(default=False, description="是否推荐")
 
+    # 行程锚点
+    meal_anchor_name: str = Field(default="", description="餐饮靠近的日内锚点名称")
+    meal_anchor_role: str = Field(default="", description="餐饮锚点角色：first_attraction/last_attraction/hotel")
+    distance_to_anchor_km: float = Field(default=0, ge=0, description="餐饮到日内锚点的直线距离(km)")
+
     # 图片
     photo: str = Field(default="", description="图片URL")
 

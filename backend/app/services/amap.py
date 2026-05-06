@@ -8,6 +8,7 @@
 2. POI 周边搜索 (search_pois_nearby)
 3. 城市天气查询 (get_city_weather)
 4. 公交路径规划 (get_transit_integrated_route)
+5. 驾车路径规划 (get_driving_route)
 
 使用方式：
     from app.services.amap import search_pois_by_text, get_city_weather
@@ -669,6 +670,39 @@ async def get_transit_integrated_route(
     return payload
 
 
+async def get_driving_route(
+    *,
+    origin: str,
+    destination: str,
+    strategy: str = "32",
+    show_fields: str = "",
+) -> dict[str, Any]:
+    """驾车路径规划，返回原始结构化响应。"""
+    api_key = _ensure_api_key()
+    params: dict[str, Any] = {
+        "key": api_key,
+        "origin": _normalize_location_text(origin),
+        "destination": _normalize_location_text(destination),
+        "strategy": str(strategy or "32").strip() or "32",
+        "output": "JSON",
+    }
+    if show_fields:
+        params["show_fields"] = str(show_fields).strip()
+
+    payload = await _request_json(
+        base_url=AMAP_V5_BASE_URL,
+        path="/direction/driving",
+        params=params,
+    )
+    payload["query"] = {
+        "origin": params["origin"],
+        "destination": params["destination"],
+        "strategy": params["strategy"],
+        "show_fields": params.get("show_fields", ""),
+    }
+    return payload
+
+
 __all__ = [
     "DEFAULT_SHOW_FIELDS",
     "POI",
@@ -679,6 +713,7 @@ __all__ = [
     "WeatherInfo",
     "WeatherResponse",
     "get_city_weather",
+    "get_driving_route",
     "get_transit_integrated_route",
     "search_pois_by_text",
     "search_pois_nearby",

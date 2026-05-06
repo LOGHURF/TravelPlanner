@@ -6,7 +6,7 @@
 3. 确定性转换为 WeatherInfo 列表
 
 图结构位置：
-- 接收 transport_agent 的输出
+- 与策略、POI、路线组合流程并行/顺序协作
 - 输出 weather 到状态
 - 连接到 final_planning
 """

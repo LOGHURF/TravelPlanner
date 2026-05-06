@@ -73,6 +73,7 @@ async def invoke_llm_json_async(
     *,
     prompt: str,
     temperature: float = 1.2,
+    max_tokens: int = 2048,
 ) -> dict[str, Any]:
     """异步调用 LLM 并返回 JSON 对象；失败时直接抛错。"""
     try:
@@ -84,7 +85,10 @@ async def invoke_llm_json_async(
             extra_body={
                 "enable_thinking": False
             },
-            model_kwargs={"response_format": {"type": "json_object"}},
+            model_kwargs={
+                "response_format": {"type": "json_object"},
+                "max_tokens": max(256, min(int(max_tokens or 2048), 4096)),
+            },
         )
         response = await llm.ainvoke(prompt)
         parsed = _extract_json_object(_response_to_text(response))
@@ -102,11 +106,13 @@ async def invoke_prompt_json_async(
     prompt_id: PromptId,
     variables: dict[str, Any],
     temperature: float = 1.2,
+    max_tokens: int = 2048,
 ) -> dict[str, Any]:
     """Render a managed prompt and invoke the JSON LLM gateway."""
     return await invoke_llm_json_async(
         prompt=render_prompt(prompt_id, variables),
         temperature=temperature,
+        max_tokens=max_tokens,
     )
 
 
@@ -445,6 +451,51 @@ def _build_day_anchor(
     return _mean_location(locations)
 
 
+def _anchor_descriptor(item: Dict[str, Any], role: str) -> Optional[Dict[str, Any]]:
+    location = _location_of(item)
+    if not location:
+        return None
+    return {
+        "location": location,
+        "name": str(item.get("name", "")).strip(),
+        "role": role,
+    }
+
+
+def _located_items(items: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    return [item for item in items or [] if _location_of(item)]
+
+
+def _meal_anchor(
+    meal_type: str,
+    day_attractions: Optional[List[Dict[str, Any]]],
+    hotel: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    attractions = _located_items(day_attractions)
+    normalized_type = meal_type.strip().lower()
+    if normalized_type == "lunch" and attractions:
+        return _anchor_descriptor(attractions[0], "first_attraction")
+    if normalized_type == "dinner" and attractions:
+        return _anchor_descriptor(attractions[-1], "last_attraction")
+    hotel_anchor = _anchor_descriptor(hotel or {}, "hotel")
+    if hotel_anchor:
+        return hotel_anchor
+    day_anchor = _build_day_anchor(day_attractions, hotel)
+    if not day_anchor:
+        return None
+    return {"location": day_anchor, "name": "", "role": "day_anchor"}
+
+
+def _with_meal_anchor_metadata(item: Dict[str, Any], anchor: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    result = dict(item)
+    if not anchor:
+        return result
+    result["meal_anchor_role"] = anchor.get("role", "")
+    result["meal_anchor_name"] = anchor.get("name", "")
+    result["distance_to_anchor_km"] = _distance_to_anchor(result, anchor.get("location"))
+    return result
+
+
 def _cluster_items_by_proximity(
     items: List[Dict[str, Any]],
     bucket_count: int,
@@ -664,34 +715,36 @@ def distribute_restaurants(
     used_keys: set[tuple[str, str]] = set()
 
     for day_index in range(days):
-        anchor = _build_day_anchor(
-            day_attractions[day_index] if day_attractions and day_index < len(day_attractions) else None,
-            day_hotels[day_index] if day_hotels and day_index < len(day_hotels) else None,
-        )
+        attractions = day_attractions[day_index] if day_attractions and day_index < len(day_attractions) else None
+        hotel = day_hotels[day_index] if day_hotels and day_index < len(day_hotels) else None
+        day_anchor = _build_day_anchor(attractions, hotel)
         preferred_types = [] if bucket_limit == 1 else ["lunch", "dinner"]
         bucket: List[Dict[str, Any]] = []
 
         for meal_type in preferred_types:
+            anchor = _meal_anchor(meal_type, attractions, hotel)
             candidate = _pick_nearest_restaurant(
                 valid,
-                anchor=anchor,
+                anchor=anchor.get("location") if anchor else day_anchor,
                 meal_type=meal_type,
                 excluded_keys=used_keys,
             )
             if not candidate:
                 continue
-            bucket.append(candidate)
+            bucket.append(_with_meal_anchor_metadata(candidate, anchor))
             used_keys.add(_named_item_key(candidate))
 
         while len(bucket) < bucket_limit:
+            meal_type = "lunch" if len(bucket) == 0 else "dinner"
+            meal_anchor = _meal_anchor(meal_type, attractions, hotel)
             candidate = _pick_nearest_restaurant(
                 valid,
-                anchor=anchor,
+                anchor=meal_anchor.get("location") if meal_anchor else day_anchor,
                 excluded_keys=used_keys,
             )
             if not candidate:
                 break
-            bucket.append(candidate)
+            bucket.append(_with_meal_anchor_metadata(candidate, meal_anchor))
             used_keys.add(_named_item_key(candidate))
 
         bucket.sort(key=lambda item: type_priority.get(str(item.get("meal_type", item.get("type", ""))).strip().lower(), 9))

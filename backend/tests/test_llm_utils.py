@@ -46,8 +46,17 @@ def test_invoke_llm_json_async_requests_json_object_response(monkeypatch) -> Non
 
     assert data == {"ok": True}
     assert _FakeJsonChatQwen.last_kwargs["model_kwargs"] == {
-        "response_format": {"type": "json_object"}
+        "response_format": {"type": "json_object"},
+        "max_tokens": 2048,
     }
+
+
+def test_invoke_llm_json_async_allows_smaller_output_limit(monkeypatch) -> None:
+    monkeypatch.setattr(utils, "ChatQwen", _FakeJsonChatQwen)
+
+    asyncio.run(utils.invoke_llm_json_async(prompt="return json", temperature=0.2, max_tokens=768))
+
+    assert _FakeJsonChatQwen.last_kwargs["model_kwargs"]["max_tokens"] == 768
 
 
 def test_invoke_prompt_json_async_renders_managed_template(monkeypatch) -> None:
@@ -63,15 +72,16 @@ def test_invoke_prompt_json_async_renders_managed_template(monkeypatch) -> None:
 
     data = asyncio.run(
         utils.invoke_prompt_json_async(
-            prompt_id="selection_retry",
+            prompt_id="travel_strategy",
             variables={
-                "selected_count": 1,
-                "available_count": 5,
-                "required_count": 3,
+                "days": 2,
+                "request_context_json": '{"destination":"杭州","days":2}',
             },
             temperature=0.2,
+            max_tokens=512,
         )
     )
 
     assert data == {"ok": True}
-    assert "目标数量是 3" in seen_prompt
+    assert "必须返回 2 天" in seen_prompt
+    assert _FakeJsonChatQwen.last_kwargs["model_kwargs"]["max_tokens"] == 512

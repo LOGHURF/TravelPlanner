@@ -2,19 +2,27 @@
 集成测试 - 验证完整数据流
 
 测试流程：
-Supervisor → (Attraction | Hotel) → FanIn → Restaurant → Transport → Weather → FinalPlanning
+Strategy-first artifacts → FanIn → Itinerary composition data → Weather → FinalPlanning
 """
 
 import asyncio
 from datetime import date, timedelta
 import pytest
 
+import app.ai.nodes.final_planning_node as final_planning_module
 from app.ai.models.graph_models import TripState
 from app.ai.nodes.orchestrator_node import orchestrator_node
 from app.ai.nodes.fan_in_node import fan_in_node
-from app.ai.nodes.final_planning_node import final_planning_node
+from app.ai.nodes.final_planning_node import _build_summary_prompt_variables, final_planning_node
+from app.ai.models import TripRequest
+from app.api.routers.travel import plan_travel_sync
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.fixture(autouse=True)
+def stub_final_summary_llm():
+    return None
 
 
 def create_initial_state() -> TripState:
@@ -37,8 +45,8 @@ def create_initial_state() -> TripState:
     }
 
 
-def mock_attraction_agent(state: TripState) -> TripState:
-    """模拟景点 Agent"""
+def seed_attractions(state: TripState) -> TripState:
+    """写入已验证景点数据"""
     state["attractions"] = [
         {
             "name": "故宫",
@@ -74,8 +82,8 @@ def mock_attraction_agent(state: TripState) -> TripState:
     return state
 
 
-def mock_hotel_agent(state: TripState) -> TripState:
-    """模拟酒店 Agent"""
+def seed_hotels(state: TripState) -> TripState:
+    """写入已验证酒店数据"""
     state["hotels"] = [
         {
             "name": "北京饭店",
@@ -125,8 +133,8 @@ def mock_weather_agent(state: TripState) -> TripState:
     return state
 
 
-def mock_restaurant_agent(state: TripState) -> TripState:
-    """模拟餐厅 Agent"""
+def seed_restaurants(state: TripState) -> TripState:
+    """写入已验证餐饮数据"""
     state["restaurants"] = [
         {
             "name": "全聚德",
@@ -145,8 +153,8 @@ def mock_restaurant_agent(state: TripState) -> TripState:
     return state
 
 
-def mock_transport_agent(state: TripState) -> TripState:
-    """模拟交通 Agent"""
+def seed_transport(state: TripState) -> TripState:
+    """写入已组合交通数据"""
     state["transport"] = {
         "suggested_mode": "mixed",
         "estimated_transport_cost": 300,
@@ -176,8 +184,8 @@ def test_parallel_agents():
     state = create_initial_state()
     
     # 模拟并行执行
-    mock_attraction_agent(state)
-    mock_hotel_agent(state)
+    seed_attractions(state)
+    seed_hotels(state)
     
     assert len(state["attractions"]) == 3
     assert len(state["hotels"]) == 2
@@ -191,14 +199,15 @@ def test_fan_in():
     state = create_initial_state()
     
     # 先执行并行 Agent
-    mock_attraction_agent(state)
-    mock_hotel_agent(state)
+    seed_attractions(state)
+    seed_hotels(state)
     
     # 执行 Fan-in
     result = asyncio.run(fan_in_node(state))
     
-    assert result["phase_1_completed"] is True
-    assert "基础数据采集完成" in result["streaming_updates"]
+    assert result["worker_batch_completed"] is True
+    assert result["completed_workers_in_batch"] == []
+    assert "Worker批次完成" in result["streaming_updates"]
     print("   ✅ Fan-in 汇聚成功")
 
 
@@ -207,13 +216,13 @@ def test_sequential_agents():
     print("\n[4/7] 测试顺序 Agents...")
     state = create_initial_state()
     
-    mock_attraction_agent(state)
-    mock_hotel_agent(state)
+    seed_attractions(state)
+    seed_hotels(state)
     asyncio.run(fan_in_node(state))
     
     # 顺序执行
-    mock_restaurant_agent(state)
-    mock_transport_agent(state)
+    seed_restaurants(state)
+    seed_transport(state)
     mock_weather_agent(state)
     
     assert len(state["restaurants"]) == 2
@@ -227,11 +236,11 @@ def test_final_planning():
     state = create_initial_state()
     
     # 执行所有前置 Agent
-    mock_attraction_agent(state)
-    mock_hotel_agent(state)
+    seed_attractions(state)
+    seed_hotels(state)
     asyncio.run(fan_in_node(state))
-    mock_restaurant_agent(state)
-    mock_transport_agent(state)
+    seed_restaurants(state)
+    seed_transport(state)
     mock_weather_agent(state)
     
     # 执行 Final Planning
@@ -263,11 +272,11 @@ def test_final_planning_uses_days_without_dates():
         "num_people": 2,
     }
 
-    mock_attraction_agent(state)
-    mock_hotel_agent(state)
+    seed_attractions(state)
+    seed_hotels(state)
     asyncio.run(fan_in_node(state))
-    mock_restaurant_agent(state)
-    mock_transport_agent(state)
+    seed_restaurants(state)
+    seed_transport(state)
     mock_weather_agent(state)
 
     result = asyncio.run(final_planning_node(state))
@@ -280,6 +289,163 @@ def test_final_planning_uses_days_without_dates():
     assert itinerary["end_date"] != ""
 
 
+def test_final_summary_prompt_variables_include_evaluation_context():
+    variables = _build_summary_prompt_variables(
+        request={"destination": "杭州", "days": 2},
+        attractions=[{"name": "西湖"}],
+        hotels=[{"name": "湖滨酒店"}],
+        restaurants=[{"name": "杭帮菜"}],
+        weather=[],
+        days=2,
+        evaluation={
+            "passed": True,
+            "score": 0.88,
+            "residual_risks": ["热门景点仍需预约"],
+        },
+    )
+
+    assert "evaluation" in variables["context_json"]
+    assert "热门景点仍需预约" in variables["context_json"]
+
+
+def test_final_planning_marks_max_repair_exhaustion_as_important_note():
+    """审核未通过但修复轮耗尽时，最终行程必须显式暴露风险。"""
+    state = create_initial_state()
+    seed_attractions(state)
+    seed_hotels(state)
+    asyncio.run(fan_in_node(state))
+    seed_restaurants(state)
+    seed_transport(state)
+    mock_weather_agent(state)
+    state["final_with_warnings"] = True
+    state["evaluation_failed_after_max_iterations"] = True
+    state["evaluation"] = {
+        "passed": False,
+        "score": 0.66,
+        "blocking_issues": ["第1天交通跨度过大"],
+        "residual_risks": ["热门景点仍需预约"],
+    }
+
+    result = asyncio.run(final_planning_node(state))
+    notes = result["itinerary_draft"]["important_notes"]
+
+    assert any("最大修复轮" in note for note in notes)
+    assert any("第1天交通跨度过大" in note for note in notes)
+    assert any("热门景点仍需预约" in note for note in notes)
+
+
+def test_final_planning_does_not_depend_on_summary_llm():
+    """最终行程不应因为总结文案 LLM 输出过长而失败。"""
+    state = create_initial_state()
+    seed_attractions(state)
+    seed_hotels(state)
+    asyncio.run(fan_in_node(state))
+    seed_restaurants(state)
+    seed_transport(state)
+    mock_weather_agent(state)
+
+    result = asyncio.run(final_planning_node(state))
+    itinerary = result["itinerary_draft"]
+
+    assert not hasattr(final_planning_module, "invoke_prompt_json_async")
+    assert result["status"] == "completed"
+    assert itinerary["overall_suggestions"]
+    assert itinerary["narrative_plan"]
+    assert itinerary["important_notes"]
+    assert itinerary["packing_tips"]
+
+
+def test_final_planning_preserves_meal_anchor_metadata():
+    state = create_initial_state()
+    state["request"]["days"] = 1
+    state["request"]["end_date"] = state["request"]["start_date"]
+    attraction = {
+        "name": "上午景点",
+        "address": "上午路",
+        "location": {"lat": 30.0, "lng": 120.0},
+        "rating": 4.8,
+        "category": "风景名胜",
+    }
+    hotel = {
+        "name": "湖滨酒店",
+        "address": "湖滨路",
+        "location": {"lat": 30.0, "lng": 120.0},
+        "price_per_night": 500,
+    }
+    meal = {
+        "name": "锚点午餐",
+        "meal_type": "lunch",
+        "location": {"lat": 30.001, "lng": 120.0},
+        "meal_anchor_name": "上午景点",
+        "meal_anchor_role": "first_attraction",
+        "distance_to_anchor_km": 0.1,
+    }
+    state["attractions"] = [attraction]
+    state["hotels"] = [hotel]
+    state["restaurants"] = [meal]
+    state["weather"] = []
+    state["transport"] = {
+        "suggested_mode": "walking",
+        "estimated_transport_cost": 0,
+        "daily_routes": [[]],
+        "daily_plan": [
+            {
+                "day_index": 1,
+                "hotel": hotel,
+                "attractions": [attraction],
+                "meals": [meal],
+            }
+        ],
+    }
+
+    result = asyncio.run(final_planning_node(state))
+
+    output_meal = result["itinerary_draft"]["days"][0]["meals"][0]
+    assert output_meal["meal_anchor_name"] == "上午景点"
+    assert output_meal["meal_anchor_role"] == "first_attraction"
+    assert output_meal["distance_to_anchor_km"] == 0.1
+
+
+def test_plan_travel_sync_serializes_validated_hotel_model():
+    class FakeGraph:
+        async def ainvoke(self, initial_state, config):
+            return {
+                "status": "completed",
+                "streaming_updates": "行程完成",
+                "itinerary_draft": {
+                    "city": "杭州",
+                    "start_date": "2026-05-05",
+                    "end_date": "2026-05-05",
+                    "total_days": 1,
+                    "days": [
+                        {
+                            "date": "2026-05-05",
+                            "day_index": 1,
+                            "hotel": {"name": "湖滨酒店", "address": "湖滨"},
+                            "attractions": [],
+                            "meals": [],
+                            "route_segments": [],
+                        }
+                    ],
+                    "narrative_plan": "杭州一日行程。",
+                    "statistics": {"attraction_count": 0, "restaurant_count": 0},
+                },
+            }
+
+    result = asyncio.run(
+        plan_travel_sync(
+            TripRequest(destination="杭州", duration=1),
+            graph=FakeGraph(),
+        )
+    )
+
+    assert result.success is True
+    assert result.itinerary is not None
+    assert isinstance(result.itinerary.hotel, dict)
+    assert result.itinerary.hotel["name"] == "湖滨酒店"
+    assert result.itinerary.hotel["address"] == "湖滨"
+
+
 def test_full_flow():
     """测试完整流程"""
     print("\n[6/7] 测试完整数据流...")
@@ -289,15 +455,15 @@ def test_full_flow():
     state = orchestrator_node(state)
     
     # 2. 并行 Phase 1
-    state = mock_attraction_agent(state)
-    state = mock_hotel_agent(state)
+    state = seed_attractions(state)
+    state = seed_hotels(state)
     
     # 3. Fan-in
     state = asyncio.run(fan_in_node(state))
     
     # 4. 顺序 Phase 2
-    state = mock_restaurant_agent(state)
-    state = mock_transport_agent(state)
+    state = seed_restaurants(state)
+    state = seed_transport(state)
     state = mock_weather_agent(state)
     
     # 5. Final Planning
@@ -306,7 +472,7 @@ def test_full_flow():
     # 验证最终结果
     assert state["status"] == "completed"
     assert "itinerary_draft" in state
-    assert "phase_1_completed" in state
+    assert state["worker_batch_completed"] is True
     
     print("   ✅ 完整数据流测试通过")
     print(f"\n📊 最终统计:")

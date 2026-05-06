@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.api.plan_stream_runner import STREAM_END, start_payload_producer
 from app.ai.models import (
     Attraction,
     DailyPlan,
@@ -28,14 +29,15 @@ logger = get_logger("TravelAPI")
 router = APIRouter()
 
 AGENT_META: dict[str, dict[str, str]] = {
-    "orchestrator": {"label": "需求拆解", "phase": "prepare"},
-    "attraction_agent": {"label": "景点 Agent", "phase": "parallel"},
-    "hotel_agent": {"label": "酒店 Agent", "phase": "parallel"},
-    "reviewer_agent": {"label": "评审 Agent", "phase": "refine"},
-    "restaurant_agent": {"label": "餐饮 Agent", "phase": "enrich"},
-    "transport_agent": {"label": "交通 Agent", "phase": "route"},
-    "weather_agent": {"label": "天气 Agent", "phase": "enrich"},
-    "final_planning": {"label": "成稿 Agent", "phase": "finalize"},
+    "orchestrator": {"label": "主控调度", "phase": "prepare"},
+    "strategy_agent": {"label": "策略规划", "phase": "prepare"},
+    "anchor_resolver_agent": {"label": "锚点验真", "phase": "refine"},
+    "nearby_poi_agent": {"label": "周边补全", "phase": "enrich"},
+    "route_matrix_agent": {"label": "路线体检", "phase": "route"},
+    "itinerary_composer_agent": {"label": "行程拼装", "phase": "route"},
+    "weather_agent": {"label": "天气检查", "phase": "parallel"},
+    "plan_evaluator_agent": {"label": "方案审核", "phase": "evaluate"},
+    "final_planning": {"label": "最终成稿", "phase": "finalize"},
 }
 
 
@@ -99,23 +101,41 @@ def _iter_new_update_lines(emitted_lines: set[str], current_updates: str) -> lis
 
 
 def _extract_counts(node_name: str, node_state: TripState) -> dict[str, int]:
-    if node_name == "attraction_agent":
-        return {"items": len(node_state.get("attractions", []))}
-    if node_name == "hotel_agent":
-        return {"items": len(node_state.get("hotels", []))}
-    if node_name == "reviewer_agent":
+    if node_name == "strategy_agent":
+        strategy = node_state.get("strategy_plan") or {}
+        days = strategy.get("daily_area_plan", []) if isinstance(strategy, dict) else []
+        return {"days": len(days)}
+    if node_name == "anchor_resolver_agent":
+        return {"items": len(node_state.get("resolved_anchors", []))}
+    if node_name == "nearby_poi_agent":
         return {
             "attractions": len(node_state.get("attractions", [])),
             "hotels": len(node_state.get("hotels", [])),
+            "restaurants": len(node_state.get("restaurants", [])),
         }
-    if node_name == "restaurant_agent":
-        return {"items": len(node_state.get("restaurants", []))}
-    if node_name == "transport_agent":
+    if node_name == "route_matrix_agent":
+        route_matrix = node_state.get("route_matrix") or {}
+        legs = route_matrix.get("legs", []) if isinstance(route_matrix, dict) else []
+        issues = route_matrix.get("issues", []) if isinstance(route_matrix, dict) else []
+        return {"routes": len(legs), "issues": len(issues)}
+    if node_name == "itinerary_composer_agent":
         transport = node_state.get("transport") or {}
         daily_plan = transport.get("daily_plan", []) if isinstance(transport, dict) else []
         return {"days": len(daily_plan)}
     if node_name == "weather_agent":
         return {"days": len(node_state.get("weather", []))}
+    if node_name == "plan_evaluator_agent":
+        evaluation = node_state.get("evaluation") or {}
+        if not isinstance(evaluation, dict):
+            return {}
+        score = int(round(float(evaluation.get("score", 0) or 0) * 100))
+        issues = evaluation.get("blocking_issues") or []
+        repairs = evaluation.get("repair_tasks") or []
+        return {
+            "score": score,
+            "issues": len(issues) if isinstance(issues, list) else 0,
+            "repairs": len(repairs) if isinstance(repairs, list) else 0,
+        }
     if node_name == "final_planning":
         itinerary = node_state.get("itinerary_draft") or {}
         statistics = itinerary.get("statistics", {}) if isinstance(itinerary, dict) else {}
@@ -128,31 +148,26 @@ def _extract_counts(node_name: str, node_state: TripState) -> dict[str, int]:
 
 
 def _build_node_artifact_payloads(node_name: str, node_state: TripState) -> list[dict[str, object]]:
-    if node_name == "attraction_agent":
-        attractions = node_state.get("attractions", [])
-        if not attractions:
-            return []
-        return [{"type": "attractions", "data": _dump_model_list(Attraction, attractions)}]
-
-    if node_name == "hotel_agent":
-        hotels = node_state.get("hotels", [])
-        if not hotels:
-            return []
-        return [{"type": "hotels", "data": _dump_model_list(Hotel, hotels)}]
-
-    if node_name == "restaurant_agent":
-        restaurants = node_state.get("restaurants", [])
-        if not restaurants:
-            return []
-        return [{"type": "restaurants", "data": _dump_model_list(Restaurant, restaurants)}]
-
     if node_name == "weather_agent":
         weather = node_state.get("weather", [])
         if not weather:
             return []
         return [{"type": "weather", "data": _dump_model_list(WeatherInfo, weather)}]
 
-    if node_name == "transport_agent":
+    if node_name == "nearby_poi_agent":
+        payloads: list[dict[str, object]] = []
+        attractions = node_state.get("attractions", [])
+        hotels = node_state.get("hotels", [])
+        restaurants = node_state.get("restaurants", [])
+        if attractions:
+            payloads.append({"type": "attractions", "data": _dump_model_list(Attraction, attractions)})
+        if hotels:
+            payloads.append({"type": "hotels", "data": _dump_model_list(Hotel, hotels)})
+        if restaurants:
+            payloads.append({"type": "restaurants", "data": _dump_model_list(Restaurant, restaurants)})
+        return payloads
+
+    if node_name == "itinerary_composer_agent":
         transport = node_state.get("transport", {})
         if not transport:
             return []
@@ -211,20 +226,55 @@ def _build_node_completion_payloads(node_name: str, node_state: TripState) -> li
 
 def _resolve_next_agent_starts(node_name: str, node_state: TripState) -> list[str]:
     if node_name == "orchestrator":
-        return ["attraction_agent", "hotel_agent", "weather_agent"]
+        action = str(node_state.get("orchestration_action", "") or "").strip()
+        if action == "worker_batch":
+            return [str(item).strip() for item in node_state.get("next_workers", []) if str(item).strip()]
+        if action == "evaluate":
+            return ["plan_evaluator_agent"]
+        if action in {"final", "final_with_warnings"}:
+            return ["final_planning"]
+        return []
     if node_name == "fan_in":
         errors = node_state.get("errors", "")
         status = node_state.get("status", "")
         if status == "error" and "未找到任何" in errors:
-            return ["final_planning"]
-        return ["reviewer_agent"]
-    if node_name == "reviewer_agent":
-        return ["restaurant_agent"]
-    if node_name == "restaurant_agent":
-        return ["transport_agent"]
-    if node_name == "transport_agent":
-        return ["final_planning"]
+            raise RuntimeError(f"fatal phase-1 issue: {errors}")
+        return ["orchestrator"]
+    if node_name == "plan_evaluator_agent":
+        evaluation = node_state.get("evaluation") or {}
+        if not isinstance(evaluation, dict):
+            raise RuntimeError("plan_evaluator_agent completed without evaluation")
+        return ["orchestrator"]
+    if node_name == "final_planning":
+        return []
+    if node_name == "weather_agent":
+        return []
+    if node_name in {
+        "strategy_agent",
+        "anchor_resolver_agent",
+        "nearby_poi_agent",
+        "route_matrix_agent",
+        "itinerary_composer_agent",
+    }:
+        return []
     return []
+
+
+def _agent_start_key(agent_id: str, node_state: TripState) -> str:
+    iteration = int(node_state.get("planning_iteration", 0) or 0)
+    step = int(node_state.get("orchestration_step", 0) or 0)
+    if agent_id == "orchestrator":
+        return f"{agent_id}:{step}"
+    return f"{agent_id}:{iteration}"
+
+
+def _next_agent_start_key(agent_id: str, node_state: TripState) -> str:
+    if agent_id != "orchestrator":
+        return _agent_start_key(agent_id, node_state)
+
+    next_state = dict(node_state)
+    next_state["orchestration_step"] = int(node_state.get("orchestration_step", 0) or 0) + 1
+    return _agent_start_key(agent_id, next_state)
 
 
 def create_initial_state(request: TripRequest) -> TripState:
@@ -244,6 +294,12 @@ def create_initial_state(request: TripRequest) -> TripState:
         "restaurants": [],
         "weather": [],
         "reviewer_notes": [],
+        "strategy_plan": {},
+        "resolved_anchors": [],
+        "hotel_area_anchors": [],
+        "anchor_resolution_results": [],
+        "planning_blockers": [],
+        "route_matrix": {},
         "transport": None,
         "itinerary_draft": None,
         "total_budget": 0.0,
@@ -251,6 +307,23 @@ def create_initial_state(request: TripRequest) -> TripState:
         "errors": "",
         "streaming_updates": "",
         "completed_agents": [],
+        "planning_iteration": 0,
+        "max_planning_iterations": 3,
+        "evaluation": None,
+        "evaluation_history": [],
+        "active_repair_tasks": [],
+        "repair_targets": [],
+        "next_workers": [],
+        "current_workers": [],
+        "completed_workers_in_batch": [],
+        "worker_batch_completed": False,
+        "worker_queue": [],
+        "final_with_warnings": False,
+        "evaluation_failed_after_max_iterations": False,
+        "orchestration_initialized": False,
+        "orchestration_action": "worker_batch",
+        "orchestration_step": 0,
+        "evaluate_after_workers": False,
         "search_keywords": "",
         "hotel_price_range": "",
         "max_attractions_per_day": 2,
@@ -293,79 +366,74 @@ async def plan_travel(request: TripRequest, graph=Depends(get_graph)):
     if request.special_requirements:
         logger.info("special requirements: %s", request.special_requirements)
     
+    async def plan_payloads():
+        """Produce planning payloads independently from SSE socket reads."""
+        initial_state = create_initial_state(request)
+
+        logger.info("graph execution started")
+
+        config = {"configurable": {"thread_id": str(uuid.uuid4())}}
+        emitted_update_lines: set[str] = set()
+        started_agents = {_agent_start_key("orchestrator", initial_state)}
+
+        yield _build_agent_payload(
+            "agent_start",
+            "orchestrator",
+            status="running",
+            message="开始拆解用户需求并生成检索参数",
+            progress=12,
+        )
+
+        async for event in graph.astream(initial_state, config):
+            for node_name, node_state in event.items():
+                if node_name == "__start__":
+                    continue
+
+                logger.info("node done: %s", node_name)
+
+                current_updates = node_state.get("streaming_updates", "")
+                new_lines = _iter_new_update_lines(emitted_update_lines, current_updates)
+                if new_lines:
+                    for line in new_lines:
+                        yield {"type": "progress", "message": line}
+                        if node_name in AGENT_META:
+                            yield _build_agent_payload(
+                                "agent_progress",
+                                node_name,
+                                status="running",
+                                message=line,
+                                progress=72,
+                            )
+
+                for payload in _build_node_completion_payloads(node_name, node_state):
+                    yield payload
+
+                for next_agent in _resolve_next_agent_starts(node_name, node_state):
+                    start_key = _next_agent_start_key(next_agent, node_state)
+                    if start_key in started_agents:
+                        continue
+                    started_agents.add(start_key)
+                    yield _build_agent_payload(
+                        "agent_start",
+                        next_agent,
+                        status="running",
+                        message=f"{AGENT_META[next_agent]['label']}已开始处理",
+                        progress=12,
+                    )
+
+        yield {"type": "done"}
+        logger.info("streaming plan done")
+
     async def event_stream():
         """SSE 流式输出"""
-        initial_state = create_initial_state(request)
-        
-        logger.info("graph execution started")
-        
-        # 生成唯一的 thread_id
-        config = {"configurable": {"thread_id": str(uuid.uuid4())}}
-        
-        # 跟踪进度
-        emitted_update_lines: set[str] = set()
-        started_agents = {"orchestrator"}
+        queue, producer_task = start_payload_producer(plan_payloads())
+        while True:
+            payload = await queue.get()
+            if payload is STREAM_END:
+                break
+            yield _sse_event(payload)
 
-        yield _sse_event(
-            _build_agent_payload(
-                "agent_start",
-                "orchestrator",
-                status="running",
-                message="开始拆解用户需求并生成检索参数",
-                progress=12,
-            )
-        )
-        
-        try:
-            async for event in graph.astream(initial_state, config):
-                for node_name, node_state in event.items():
-                    if node_name == "__start__":
-                        continue
-                    
-                    logger.info("node done: %s", node_name)
-                    
-                    # 获取进度更新
-                    current_updates = node_state.get("streaming_updates", "")
-                    new_lines = _iter_new_update_lines(emitted_update_lines, current_updates)
-                    if new_lines:
-                        for line in new_lines:
-                            yield _sse_event({"type": "progress", "message": line})
-                            if node_name in AGENT_META:
-                                yield _sse_event(
-                                    _build_agent_payload(
-                                        "agent_progress",
-                                        node_name,
-                                        status="running",
-                                        message=line,
-                                        progress=72,
-                                    )
-                                )
-
-                    for payload in _build_node_completion_payloads(node_name, node_state):
-                        yield _sse_event(payload)
-
-                    for next_agent in _resolve_next_agent_starts(node_name, node_state):
-                        if next_agent in started_agents:
-                            continue
-                        started_agents.add(next_agent)
-                        yield _sse_event(
-                            _build_agent_payload(
-                                "agent_start",
-                                next_agent,
-                                status="running",
-                                message=f"{AGENT_META[next_agent]['label']}已开始处理",
-                                progress=12,
-                            )
-                        )
-        
-        except Exception as e:
-            logger.error("streaming plan failed: %s", e)
-            yield _sse_event({"type": "error", "message": str(e)})
-            logger.info("streaming plan failed")
-            return
-        
-        yield _sse_event({"type": "done"})
-        logger.info("streaming plan done")
+        await producer_task
     
     return StreamingResponse(
         event_stream(),
@@ -393,10 +461,13 @@ async def plan_travel_sync(request: TripRequest, graph=Depends(get_graph)):
 
     if itinerary:
         validated_itinerary = TripPlan.model_validate(itinerary)
+        hotel_payload = None
+        if validated_itinerary.days and validated_itinerary.days[0].hotel:
+            hotel_payload = validated_itinerary.days[0].hotel.model_dump(mode="json")
         itinerary_response = ItineraryResponse(
             destination=validated_itinerary.city or request.destination,
             days=validated_itinerary.total_days or request.days,
-            hotel=validated_itinerary.days[0].hotel if validated_itinerary.days else None,
+            hotel=hotel_payload,
             daily_plans=validated_itinerary.days,
             attraction_count=validated_itinerary.statistics.get("attraction_count", 0),
             restaurant_count=validated_itinerary.statistics.get("restaurant_count", 0),

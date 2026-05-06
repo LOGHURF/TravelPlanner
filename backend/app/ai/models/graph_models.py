@@ -10,7 +10,13 @@ from datetime import date
 
 def _concat_streaming_updates(left: str, right: str) -> str:
     """Reducer: 合并并行步骤产生的流式更新文本。"""
-    return (left or "") + (right or "")
+    left_text = left or ""
+    right_text = right or ""
+    if not right_text:
+        return left_text
+    if left_text and right_text.startswith(left_text):
+        return right_text
+    return left_text + right_text
 
 
 def _merge_completed_agents(left: List[str], right: List[str]) -> List[str]:
@@ -33,13 +39,13 @@ class TripState(TypedDict, total=False):
     - 流程控制: status, errors, streaming_updates, completed_agents
     - 最终结果: itinerary_draft（TripPlan结构）
 
-    注意：并行节点应避免写入同一字段。每个Agent应只写入自己的输出字段：
-    - attraction_agent: 只写入 attraction_candidates
-    - hotel_agent: 只写入 hotel_candidates
-    - reviewer_agent: 写入 attractions/hotels（评审后结果）
-    - weather_agent: 只写入 weather
-    - restaurant_agent: 只写入 restaurants
-    - transport_agent: 只写入 transport 和 itinerary_draft
+    注意：worker 节点应避免写入同一字段。当前 strategy-first 流程的主要写入边界：
+    - strategy_agent: strategy_plan
+    - anchor_resolver_agent: resolved_anchors, hotel_area_anchors
+    - nearby_poi_agent: attractions, hotels, restaurants
+    - route_matrix_agent: route_matrix
+    - itinerary_composer_agent: transport
+    - weather_agent: weather
     """
 
     # ═══════════════════════════════════════════════════════
@@ -54,7 +60,17 @@ class TripState(TypedDict, total=False):
     hotel_level: str  # 住宿偏好："舒适型"/"高档型"/"豪华型"
 
     # ═══════════════════════════════════════════════════════
-    # Phase 1: Supervisor 生成的搜索参数
+    # Phase 1: Strategy-first planning artifacts
+    # ═══════════════════════════════════════════════════════
+    strategy_plan: Dict[str, Any]  # LLM 生成的每日片区/锚点骨架
+    resolved_anchors: List[Dict[str, Any]]  # POI 验证后的景点锚点
+    hotel_area_anchors: List[Dict[str, Any]]  # POI 验证后的住宿片区锚点
+    anchor_resolution_results: List[Dict[str, Any]]  # 每个策略锚点的 POI 解析结果
+    planning_blockers: List[Dict[str, Any]]  # 可修复的业务阻塞，不是系统异常
+    route_matrix: Dict[str, Any]  # 前置路线矩阵与风险
+
+    # ═══════════════════════════════════════════════════════
+    # Search and request-derived parameters used by current nodes and shared models
     # ═══════════════════════════════════════════════════════
     search_keywords: str  # 生成的搜索关键词
     hotel_price_range: str  # 酒店价格范围，如"200,500"
@@ -70,23 +86,44 @@ class TripState(TypedDict, total=False):
     # ═══════════════════════════════════════════════════════
     # Phase 2: Agent 输出结果（并行采集）
     # ═══════════════════════════════════════════════════════
-    attraction_candidates: List[Dict[str, Any]]  # 景点候选池（Attraction Agent输出）
-    hotel_candidates: List[Dict[str, Any]]  # 酒店候选池（Hotel Agent输出）
-    attractions: List[Dict[str, Any]]  # 评审后景点列表（Reviewer Agent输出）
-    hotels: List[Dict[str, Any]]  # 评审后酒店列表（Reviewer Agent输出）
-    restaurants: List[Dict[str, Any]]  # 餐厅列表（Restaurant Agent输出）
-    weather: List[Dict[str, Any]]  # 天气预报（Weather Agent输出）
+    attraction_candidates: List[Dict[str, Any]]
+    hotel_candidates: List[Dict[str, Any]]
+    attractions: List[Dict[str, Any]]  # verified anchor attractions
+    hotels: List[Dict[str, Any]]  # nearby hotel POIs
+    restaurants: List[Dict[str, Any]]  # nearby restaurant POIs
+    weather: List[Dict[str, Any]]  # 天气预报（Weather Agent 输出）
     reviewer_notes: List[str]  # 评审说明
 
     # ═══════════════════════════════════════════════════════
     # Phase 3: 路线规划结果
     # ═══════════════════════════════════════════════════════
-    transport: Optional[Dict[str, Any]]  # 交通/路线规划（Transport Agent输出）
+    transport: Optional[Dict[str, Any]]  # 行程组合器生成的交通/每日安排
 
     # ═══════════════════════════════════════════════════════
     # Phase 4: 最终行程（DailyPlan + TripPlan）
     # ═══════════════════════════════════════════════════════
     itinerary_draft: Optional[Dict[str, Any]]  # 最终日程（TripPlan结构）
+
+    # ═══════════════════════════════════════════════════════
+    # Phase 5: 方案审核与定向修复循环
+    # ═══════════════════════════════════════════════════════
+    planning_iteration: int  # 当前修复迭代轮次，初始为0
+    max_planning_iterations: int  # 最大修复迭代次数
+    evaluation: Optional[Dict[str, Any]]  # 最新方案审核结果
+    evaluation_history: List[Dict[str, Any]]  # 每轮方案审核历史
+    active_repair_tasks: List[Dict[str, Any]]  # 当前轮需要执行的定向修复任务
+    repair_targets: List[str]  # 当前轮要派发的 worker 节点
+    next_workers: List[str]  # Orchestrator 本轮派发的 worker 节点
+    current_workers: List[str]  # 当前正在汇合的 worker 批次
+    completed_workers_in_batch: List[str]  # 当前批次已汇合的 worker 节点
+    worker_batch_completed: bool  # 当前 worker 批次是否已汇合完成
+    worker_queue: List[List[str]]  # Orchestrator 尚未派发的后续 worker 批次
+    final_with_warnings: bool  # 达到最大修复轮后是否带风险成稿
+    evaluation_failed_after_max_iterations: bool  # 审核未通过但修复轮耗尽
+    orchestration_initialized: bool  # Orchestrator 是否已完成首次初始化
+    orchestration_action: str  # "worker_batch" | "evaluate" | "final"
+    orchestration_step: int  # Orchestrator 调度步数，用于流式事件去重
+    evaluate_after_workers: bool  # worker 队列跑完后是否进入方案审核
 
     # ═══════════════════════════════════════════════════════
     # 流程控制字段

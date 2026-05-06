@@ -9,6 +9,7 @@ from app.services.amap import (
     POISearchResponse,
     WeatherResponse,
     get_city_weather,
+    get_driving_route,
     get_transit_integrated_route,
     search_pois_by_text,
     search_pois_nearby,
@@ -121,6 +122,23 @@ async def maps_transit_integrated(
         nightflag=nightflag,
         date=date,
         time=time,
+        show_fields=show_fields,
+    )
+
+
+@mcp.tool(name="maps_direction_driving")
+async def maps_direction_driving(
+    origin: str,
+    destination: str,
+    strategy: str = "32",
+    show_fields: str = "",
+) -> dict:
+    """Query driving route using AMap direction 2.0."""
+
+    return await get_driving_route(
+        origin=origin,
+        destination=destination,
+        strategy=strategy,
         show_fields=show_fields,
     )
 

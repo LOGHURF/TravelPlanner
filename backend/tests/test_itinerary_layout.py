@@ -121,3 +121,48 @@ def test_distribute_restaurants_assigns_nearby_meals_for_each_day() -> None:
 
     assert [item["name"] for item in result[0]] == ["湖滨午餐", "湖畔晚餐"]
     assert [item["name"] for item in result[1]] == ["湘湖午餐", "湘湖晚餐"]
+
+
+def test_distribute_restaurants_uses_meal_specific_day_anchors() -> None:
+    restaurants = [
+        {
+            "name": "第一段午餐",
+            "meal_type": "lunch",
+            "location": {"lat": 30.0005, "lng": 120.0000},
+            "rating": 4.2,
+        },
+        {
+            "name": "末段午餐",
+            "meal_type": "lunch",
+            "location": {"lat": 30.1005, "lng": 120.0000},
+            "rating": 4.9,
+        },
+        {
+            "name": "第一段晚餐",
+            "meal_type": "dinner",
+            "location": {"lat": 30.0010, "lng": 120.0000},
+            "rating": 4.9,
+        },
+        {
+            "name": "末段晚餐",
+            "meal_type": "dinner",
+            "location": {"lat": 30.1010, "lng": 120.0000},
+            "rating": 4.3,
+        },
+    ]
+    day_attractions = [
+        [
+            {"name": "上午景点", "location": {"lat": 30.0000, "lng": 120.0000}},
+            {"name": "下午景点", "location": {"lat": 30.1000, "lng": 120.0000}},
+        ]
+    ]
+    day_hotels = [{"name": "末段酒店", "location": {"lat": 30.1000, "lng": 120.0000}}]
+
+    result = distribute_restaurants(
+        restaurants,
+        1,
+        day_attractions=day_attractions,
+        day_hotels=day_hotels,
+    )
+
+    assert [item["name"] for item in result[0]] == ["第一段午餐", "末段晚餐"]
