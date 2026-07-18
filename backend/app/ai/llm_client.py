@@ -20,17 +20,17 @@ def get_llm(temperature: float = None, model: str = None) -> ChatOpenAI:
     Returns:
         配置好的 ChatOpenAI 实例
     """
-    if not settings.DEEPSEEK_API_KEY:
-        raise RuntimeError("DEEPSEEK_API_KEY 环境变量未设置")
+    if not settings.llm_api_key:
+        raise RuntimeError("未设置 LLM API Key（请配置 LLM_API_KEY 或 DEEPSEEK_API_KEY）")
 
     temp = temperature if temperature is not None else settings.LLM_TEMPERATURE
     model_name = model if model else settings.LLM_MODEL
 
-    logger.debug(f"创建 LLM: model={model_name}, temp={temp}, base_url={settings.DEEPSEEK_BASE_URL}")
+    logger.debug(f"创建 LLM: model={model_name}, temp={temp}, base_url={settings.llm_base_url}")
 
     return ChatOpenAI(
         model=model_name,
-        api_key=settings.DEEPSEEK_API_KEY,
-        base_url=settings.DEEPSEEK_BASE_URL,
+        api_key=settings.llm_api_key,
+        base_url=settings.llm_base_url,
         temperature=temp,
     )

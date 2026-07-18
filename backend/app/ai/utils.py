@@ -7,7 +7,7 @@ from datetime import datetime
 from math import asin, cos, radians, sin, sqrt
 from typing import Any, Tuple
 
-from langchain_qwq import ChatQwen
+from langchain_openai import ChatOpenAI
 
 from app.config import get_logger, settings
 from app.ai.errors import LLMJsonError
@@ -75,16 +75,20 @@ async def invoke_llm_json_async(
     temperature: float = 1.2,
     max_tokens: int = 2048,
 ) -> dict[str, Any]:
-    """异步调用 LLM 并返回 JSON 对象；失败时直接抛错。"""
+    """异步调用 LLM 并返回 JSON 对象；失败时直接抛错。
+
+    走通用 OpenAI 兼容配置（LLM_API_KEY / LLM_BASE_URL / LLM_MODEL），
+    可接入任意兼容 OpenAI 接口的服务（GPT、中转站、DeepSeek 等）。
+    """
+    if not settings.llm_api_key:
+        raise LLMJsonError("未设置 LLM API Key（请配置 LLM_API_KEY 或 DEEPSEEK_API_KEY）")
+
     try:
-        llm = ChatQwen(
-            model="qwen3.5-flash-2026-02-23",
-            api_key=settings.DASHSCOPE_API_KEY,
-            base_url=settings.DASHSCOPE_BASE_URL,
+        llm = ChatOpenAI(
+            model=settings.LLM_MODEL,
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_base_url,
             temperature=temperature,
-            extra_body={
-                "enable_thinking": False
-            },
             model_kwargs={
                 "response_format": {"type": "json_object"},
                 "max_tokens": max(256, min(int(max_tokens or 2048), 4096)),

@@ -50,12 +50,18 @@ class Settings(BaseSettings):
     CORS_ALLOWED_ORIGINS: str = "http://127.0.0.1:5173,http://localhost:5173"
 
     # ==================== LLM 配置 ====================
-    # DeepSeek API Key
+    # 通用 LLM 配置（OpenAI 兼容协议）
+    # 可指向任意兼容 OpenAI 接口的服务：官方 OpenAI、中转站、DeepSeek、本地推理等
+    # 留空时自动回退到旧的 DEEPSEEK_* 配置，保证向后兼容
+    LLM_API_KEY: str = ""
+    LLM_BASE_URL: str = ""
+
+    # DeepSeek API Key（旧配置，作为 LLM_API_KEY 未设置时的回退）
     DEEPSEEK_API_KEY: str = ""
     DASHSCOPE_API_KEY: str = ""
     DASHSCOPE_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
-    # DeepSeek API Base URL
+    # DeepSeek API Base URL（旧配置，作为 LLM_BASE_URL 未设置时的回退）
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
 
     # 默认模型
@@ -63,6 +69,18 @@ class Settings(BaseSettings):
 
     # 默认温度
     LLM_TEMPERATURE: float = 1.3
+
+    @computed_field
+    @property
+    def llm_api_key(self) -> str:
+        """获取 LLM API Key（优先使用通用 LLM_API_KEY，回退到 DEEPSEEK_API_KEY）"""
+        return self.LLM_API_KEY or self.DEEPSEEK_API_KEY
+
+    @computed_field
+    @property
+    def llm_base_url(self) -> str:
+        """获取 LLM Base URL（优先使用通用 LLM_BASE_URL，回退到 DEEPSEEK_BASE_URL）"""
+        return self.LLM_BASE_URL or self.DEEPSEEK_BASE_URL
 
     # ==================== 高德地图配置 ====================
     # 高德地图 API Key
