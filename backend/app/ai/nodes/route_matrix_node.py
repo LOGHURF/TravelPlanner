@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from app.ai.models.graph_models import TripState
+from app.ai.demo_data import route_matrix as demo_route_matrix
 from app.ai.nodes.plan_data_utils import location_text, straight_line_distance_km
 from app.ai.utils import parse_float, parse_location
-from app.config import get_logger
+from app.config import get_logger, settings
 from app.services.amap import get_driving_route
 
 logger = get_logger("RouteMatrix")
@@ -228,6 +229,19 @@ async def _build_driving_leg(
 
 async def route_matrix_node(state: TripState) -> dict[str, Any]:
     """Create route legs for each day's verified attractions."""
+    if settings.DEMO_MODE:
+        matrix = demo_route_matrix(list(state.get("attractions") or []))
+        logger.info(
+            "demo route matrix ready legs=%s issues=%s",
+            len(matrix.get("legs", [])),
+            len(matrix.get("issues", [])),
+        )
+        return {
+            "route_matrix": matrix,
+            "streaming_updates": f"\n演示路线矩阵完成: {len(matrix.get('legs', []))}段, 0段需修复",
+            "completed_agents": ["route_matrix"],
+        }
+
     legs: list[dict[str, Any]] = []
     issues: list[dict[str, Any]] = []
     daily_routes: list[list[dict[str, Any]]] = []

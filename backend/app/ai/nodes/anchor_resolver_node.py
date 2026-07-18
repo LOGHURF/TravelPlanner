@@ -8,7 +8,8 @@ from app.ai.models.graph_models import TripState
 from app.ai.models.planning_contracts import AnchorResolution, PlanningBlocker, StrategyAnchor, strategy_anchor_from_value
 from app.ai.nodes.plan_data_utils import anchor_from_poi
 from app.ai.poi_types import ATTRACTION_TYPE_CODES
-from app.config import get_logger
+from app.config import get_logger, settings
+from app.ai.demo_data import resolved_anchors as demo_resolved_anchors
 from app.services.amap import POI, search_pois_by_text
 
 logger = get_logger("AnchorResolver")
@@ -150,6 +151,18 @@ async def anchor_resolver_node(state: TripState) -> dict[str, Any]:
     daily_area_plan = strategy.get("daily_area_plan") if isinstance(strategy, dict) else None
     if not isinstance(daily_area_plan, list) or not daily_area_plan:
         raise ValueError("anchor resolver requires strategy_plan.daily_area_plan")
+
+    if settings.DEMO_MODE:
+        resolved, hotel_areas, results = demo_resolved_anchors(request, strategy)
+        logger.info("demo anchors resolved attractions=%s hotel_areas=%s", len(resolved), len(hotel_areas))
+        return {
+            "resolved_anchors": resolved,
+            "hotel_area_anchors": hotel_areas,
+            "anchor_resolution_results": results,
+            "planning_blockers": [],
+            "streaming_updates": f"\n演示锚点验证完成: {len(resolved)}个景点锚点, {len(hotel_areas)}个住宿片区",
+            "completed_agents": ["anchor_resolver"],
+        }
 
     resolved_anchors: list[dict[str, Any]] = []
     resolution_results: list[AnchorResolution] = []

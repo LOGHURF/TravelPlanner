@@ -17,7 +17,8 @@ from app.ai.nodes.plan_data_utils import (
 from app.ai.poi_types import HOTEL_TYPE_CODE, HOTEL_TYPE_PREFIX, RESTAURANT_TYPE_CODE, RESTAURANT_TYPE_PREFIX, has_type_prefix
 from app.ai.planning_gates import evaluate_resource_gate
 from app.ai.utils import parse_location
-from app.config import get_logger
+from app.config import get_logger, settings
+from app.ai.demo_data import attractions as demo_attractions, hotels as demo_hotels, restaurants as demo_restaurants
 from app.services.amap import search_pois_nearby
 
 logger = get_logger("NearbyPOI")
@@ -231,6 +232,27 @@ async def _search_restaurants(state: TripState) -> list[dict[str, Any]]:
 
 async def nearby_poi_node(state: TripState) -> dict[str, Any]:
     """Build POI-backed attractions, hotels, and restaurants from verified anchors."""
+    if settings.DEMO_MODE:
+        request = state.get("request", {})
+        anchors = list(state.get("resolved_anchors") or [])
+        attractions = demo_attractions(request, anchors)
+        hotels = demo_hotels(request)
+        restaurants = demo_restaurants(request, anchors)
+        logger.info(
+            "demo nearby poi ready attractions=%s hotels=%s restaurants=%s",
+            len(attractions),
+            len(hotels),
+            len(restaurants),
+        )
+        return {
+            "attractions": attractions,
+            "hotels": hotels,
+            "restaurants": restaurants,
+            "planning_blockers": [],
+            "streaming_updates": f"\n演示周边POI完成: 景点{len(attractions)}个, 酒店{len(hotels)}家, 餐厅{len(restaurants)}家",
+            "completed_agents": ["nearby_poi"],
+        }
+
     attractions = [anchor_to_attraction(anchor) for anchor in state.get("resolved_anchors") or []]
     blockers = evaluate_resource_gate(state)
     if blockers:

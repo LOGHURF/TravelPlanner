@@ -91,6 +91,12 @@ class Settings(BaseSettings):
     # MCP 服务器 URL
     MCP_AMAP_URL: str = "https://mcp.amap.com/sse"
 
+    # 本地无高德 Key 时可跳过启动期 MCP 初始化，避免开发服务卡在外部工具连接
+    SKIP_MCP_INIT: bool = False
+
+    # 无 Key 演示模式：使用内置演示数据跑完整规划链路
+    DEMO_MODE: bool = False
+
     # ==================== 日志配置 ====================
     LOG_LEVEL: str = "INFO"
 

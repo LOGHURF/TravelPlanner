@@ -10,7 +10,8 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 from app.ai.models.graph_models import TripState
 from app.ai.models.planning_contracts import PlanningBlocker, StrategyAnchor
 from app.ai.utils import invoke_prompt_json_async
-from app.config import get_logger
+from app.config import get_logger, settings
+from app.ai.demo_data import strategy_plan as demo_strategy_plan
 
 logger = get_logger("StrategyPlanner")
 
@@ -129,6 +130,16 @@ async def strategy_node(state: TripState) -> dict[str, Any]:
     """Generate a route skeleton made of daily areas and anchor names."""
     request_context = _request_context(state)
     days = int(request_context.get("days", 1) or 1)
+    if settings.DEMO_MODE:
+        strategy = demo_strategy_plan(state.get("request", {}))
+        logger.info("demo strategy ready days=%s", len(strategy.get("daily_area_plan", [])))
+        return {
+            "strategy_plan": strategy,
+            "planning_blockers": [],
+            "streaming_updates": f"\n演示策略完成: {days}天片区骨架",
+            "completed_agents": ["strategy"],
+        }
+
     data = await invoke_prompt_json_async(
         prompt_id="travel_strategy",
         variables={

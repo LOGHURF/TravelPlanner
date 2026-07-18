@@ -17,14 +17,19 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     logger.info("app startup name=%s version=%s", settings.APP_NAME, settings.APP_VERSION)
 
-    # 初始化 MCP 工具
-    logger.info("initializing mcp tools")
-    try:
-        await initialize_mcp_tools()
-        logger.info("mcp tools initialized")
-    except Exception as e:
-        logger.error("mcp initialization failed: %s", e)
-        raise
+    # 初始化 MCP 工具；本地演示可跳过，避免无真实高德 Key 时阻塞应用启动
+    if settings.DEMO_MODE:
+        logger.warning("demo mode enabled, skip mcp tools initialization")
+    elif settings.SKIP_MCP_INIT:
+        logger.warning("skip mcp tools initialization")
+    else:
+        logger.info("initializing mcp tools")
+        try:
+            await initialize_mcp_tools()
+            logger.info("mcp tools initialized")
+        except Exception as e:
+            logger.error("mcp initialization failed: %s", e)
+            raise
 
     yield
 

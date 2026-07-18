@@ -8,9 +8,10 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.ai.models.graph_models import TripState
+from app.ai.demo_data import evaluation as demo_evaluation
 from app.ai.nodes.plan_data_utils import straight_line_distance_km
 from app.ai.utils import invoke_prompt_json_async, parse_location
-from app.config import get_logger
+from app.config import get_logger, settings
 
 logger = get_logger("PlanEvaluator")
 
@@ -423,6 +424,20 @@ async def plan_evaluator_node(state: TripState) -> dict[str, Any]:
     """Evaluate the full plan and produce targeted repair tasks."""
     planning_iteration = int(state.get("planning_iteration", 0) or 0)
     max_iterations = int(state.get("max_planning_iterations", 3) or 3)
+    if settings.DEMO_MODE:
+        evaluation_payload = demo_evaluation()
+        history = list(state.get("evaluation_history") or [])
+        history.append(evaluation_payload)
+        logger.info("demo plan evaluation passed score=%.2f", evaluation_payload["score"])
+        return {
+            "evaluation": evaluation_payload,
+            "evaluation_history": history,
+            "active_repair_tasks": [],
+            "repair_targets": [],
+            "streaming_updates": f"\n演示方案审核通过: score={evaluation_payload['score']:.2f}",
+            "completed_agents": ["plan_evaluator"],
+        }
+
     context = _build_plan_context(state)
     evaluation = _blocker_evaluation(state)
     if evaluation is None:

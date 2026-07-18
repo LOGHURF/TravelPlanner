@@ -16,7 +16,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict
 
-from app.config import get_logger
+from app.config import get_logger, settings
+from app.ai.demo_data import weather as demo_weather
 from app.ai.models.graph_models import TripState
 from app.ai.models import WeatherInfo
 from app.ai.utils import parse_int
@@ -143,6 +144,15 @@ async def weather_node(state: TripState) -> Dict[str, Any]:
         days,
         WEATHER_TOOL_NAME,
     )
+
+    if settings.DEMO_MODE:
+        weather = demo_weather(request)[:select_limit]
+        logger.info("demo weather ready count=%s", len(weather))
+        return {
+            "weather": weather,
+            "streaming_updates": f"\n演示天气完成: {len(weather)}天",
+            "completed_agents": ["weather"],
+        }
 
     # 1) 调用天气 MCP 工具，获取结构化响应
     weather_response = await _collect_mcp_result(
